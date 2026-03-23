@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>SynthGen</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenGL 4.5 + GLFW windowing + input -->
+    <PackageReference Include="Silk.NET" Version="2.16.0" />
+    <PackageReference Include="Silk.NET.OpenGL.Extensions.ImGui" Version="2.16.0" />
+
+    <!-- FBX / OBJ / glTF model import -->
+    <PackageReference Include="AssimpNet" Version="5.0.0-beta1" />
+
+    <!-- Image I/O (PNG, JPG, HDR) -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.9" />
+    <PackageReference Include="StbImageSharp" Version="2.30.15" />
+    <PackageReference Include="TinyExr.Net" Version="0.3.11" />
+  </ItemGroup>
+
+</Project>

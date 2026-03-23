@@ -1,0 +1,13 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.dll
+*.exe
+*.pdb
+*.cache
+packages/
+*.nupkg
+tmp/
+shader_error.log
