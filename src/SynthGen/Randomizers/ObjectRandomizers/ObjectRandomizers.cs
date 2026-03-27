@@ -5,6 +5,23 @@ using SynthGen.Scene.Components;
 
 namespace SynthGen.Randomizers.ObjectRandomizers;
 
+/// <summary>
+/// Checks if an object (or any ancestor) is excluded from randomization.
+/// </summary>
+static class RandomizerHelper
+{
+    public static bool ShouldRandomize(SceneObject obj)
+    {
+        var current = obj;
+        while (current != null)
+        {
+            if (current.ExcludeFromRandomization) return false;
+            current = current.Parent;
+        }
+        return true;
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Position Randomizer
 // ═══════════════════════════════════════════════════════════════════════════
@@ -21,6 +38,7 @@ public class PositionRandomizer : RandomizerBase
         foreach (var obj in scene.Objects)
         {
             if (!obj.HasComponent<MeshRendererComponent>()) continue;
+            if (!RandomizerHelper.ShouldRandomize(obj)) continue;
             obj.Transform.Position = new Vector3(
                 RandRange(rng, MinBounds.X, MaxBounds.X),
                 RandRange(rng, MinBounds.Y, MaxBounds.Y),
@@ -52,6 +70,7 @@ public class RotationRandomizer : RandomizerBase
         foreach (var obj in scene.Objects)
         {
             if (!obj.HasComponent<MeshRendererComponent>()) continue;
+            if (!RandomizerHelper.ShouldRandomize(obj)) continue;
             obj.Transform.Rotation = new Vector3(
                 RandRange(rng, MinAngles.X, MaxAngles.X),
                 RandRange(rng, MinAngles.Y, MaxAngles.Y),
@@ -84,6 +103,7 @@ public class ScaleRandomizer : RandomizerBase
         foreach (var obj in scene.Objects)
         {
             if (!obj.HasComponent<MeshRendererComponent>()) continue;
+            if (!RandomizerHelper.ShouldRandomize(obj)) continue;
 
             if (UniformScale)
             {
@@ -129,6 +149,7 @@ public class TextureRandomizer : RandomizerBase
         {
             var mr = obj.GetComponent<MeshRendererComponent>();
             if (mr == null) continue;
+            if (!RandomizerHelper.ShouldRandomize(obj)) continue;
 
             string texPath = TexturePaths[rng.Next(TexturePaths.Count)];
             uint texId = LoadTextureFunc(texPath);
@@ -167,6 +188,7 @@ public class DepthScaleMapper : RandomizerBase
         foreach (var obj in scene.Objects)
         {
             if (!obj.HasComponent<MeshRendererComponent>()) continue;
+            if (!RandomizerHelper.ShouldRandomize(obj)) continue;
 
             float dist = Vector3.Distance(cam.Transform.Position, obj.Transform.Position);
             float t = MathF.Min(dist / ReferenceDistance, 1f);
@@ -182,3 +204,4 @@ public class DepthScaleMapper : RandomizerBase
         ImGui.DragFloat("Reference Dist", ref ReferenceDistance, 0.5f, 1f, 100f);
     }
 }
+

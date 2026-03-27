@@ -67,7 +67,7 @@ public class Renderer : IDisposable
     // HDRI support
     public uint HdriTextureID { get; set; } = 0;
     public float HdriStrength { get; set; } = 1.0f;
-    public SceneObject? SelectedObject { get; set; }
+    public IEnumerable<SceneObject> SelectedObjects { get; set; } = Array.Empty<SceneObject>();
 
     public Renderer(GL gl, int width, int height)
     {
@@ -194,8 +194,8 @@ public class Renderer : IDisposable
         _rgbFbo.Unbind();
 
         // ── Selection Outline (screen-space, after RGB is complete) ───────
-        if (SelectedObject != null)
-            DrawSelectionHighlight(SelectedObject, view, proj);
+        if (SelectedObjects.Any())
+            DrawSelectionHighlight(SelectedObjects, view, proj);
 
         // ── Segmentation Pass ─────────────────────────────────────────────
         _segFbo.Bind();
@@ -308,6 +308,7 @@ public class Renderer : IDisposable
             _pbrShader.SetFloat("uSmoothness", mr.Material.Smoothness);
             _pbrShader.SetFloat("uMetallic", mr.Material.Metallic);
             _pbrShader.SetFloat("uNormalScale", mr.Material.NormalScale);
+            _pbrShader.SetFloat("uColorIntensity", mr.Material.ColorIntensity);
             _pbrShader.SetVec3("uEmissiveColor", mr.Material.EmissiveColor);
             _pbrShader.SetFloat("uEmissiveIntensity", mr.Material.EmissiveIntensity);
 
@@ -351,8 +352,14 @@ public class Renderer : IDisposable
             var label = obj.GetComponent<LabelComponent>();
             if (mr?.Mesh == null || !mr.Visible || label == null) continue;
 
+            // Use body part group color if assigned, otherwise fallback to label color
+            Vector3 segColor = label.SegmentationColor;
+            var groupColor = SynthGen.Scene.Components.BodyPartGroups.GetColor(obj.BodyPartGroup);
+            if (groupColor.HasValue)
+                segColor = groupColor.Value;
+
             _segShader.SetMat4("uModel", obj.GetWorldMatrix());
-            _segShader.SetVec3("uSegColor", label.SegmentationColor);
+            _segShader.SetVec3("uSegColor", segColor);
 
             bool useSkinning = mr.Mesh.HasSkinning && mr.Mesh.Skeleton != null;
             _segShader.SetInt("uHasSkinning", useSkinning ? 1 : 0);
@@ -393,11 +400,13 @@ public class Renderer : IDisposable
         }
     }
 
-    private void DrawSelectionHighlight(SceneObject selected, Matrix4x4 view, Matrix4x4 proj)
+    private void DrawSelectionHighlight(IEnumerable<SceneObject> selectedObjects, Matrix4x4 view, Matrix4x4 proj)
     {
         // Collect all meshes to highlight (selected + all its children)
         var meshObjects = new List<(SceneObject obj, MeshRendererComponent mr)>();
-        CollectMeshObjects(selected, meshObjects);
+        foreach (var selected in selectedObjects)
+            CollectMeshObjects(selected, meshObjects);
+        
         if (meshObjects.Count == 0) return;
 
         // === STEP 1: Render selection mask (white on black) ===
@@ -414,6 +423,16 @@ public class Renderer : IDisposable
         {
             if (mr.Mesh == null || !mr.Visible) continue;
             _outlineMaskShader.SetMat4("uModel", obj.GetWorldMatrix());
+
+            // Apply skinning so outline follows animated pose
+            bool useSkinning = mr.Mesh.HasSkinning && mr.Mesh.Skeleton != null;
+            _outlineMaskShader.SetInt("uHasSkinning", useSkinning ? 1 : 0);
+            if (useSkinning)
+            {
+                var matrices = mr.Mesh.Skeleton!.GetFinalMatrices();
+                for (int m = 0; m < matrices.Length && m < 100; m++)
+                    _outlineMaskShader.SetMat4($"uBones[{m}]", matrices[m]);
+            }
             mr.Mesh.Draw();
         }
         _selectionMaskFbo.Unbind();

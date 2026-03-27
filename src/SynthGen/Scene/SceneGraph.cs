@@ -13,7 +13,17 @@ public class SceneGraph
     private readonly List<SceneObject> _objects = new();
 
     public Camera? ActiveCamera { get; set; }
-    public SceneObject? SelectedObject { get; set; }
+    public List<SceneObject> SelectedObjects { get; } = new();
+
+    public SceneObject? SelectedObject
+    {
+        get => SelectedObjects.LastOrDefault();
+        set
+        {
+            SelectedObjects.Clear();
+            if (value != null) SelectedObjects.Add(value);
+        }
+    }
 
     public IReadOnlyList<SceneObject> Objects => _objects;
 
@@ -25,7 +35,7 @@ public class SceneGraph
 
     public void RemoveObject(SceneObject obj)
     {
-        if (SelectedObject == obj) SelectedObject = null;
+        SelectedObjects.Remove(obj);
         _objects.Remove(obj);
         foreach (var child in obj.Children) RemoveObject(child);
     }
@@ -33,7 +43,7 @@ public class SceneGraph
     public void Clear()
     {
         _objects.Clear();
-        SelectedObject = null;
+        SelectedObjects.Clear();
     }
 
     public List<SceneObject> GetObjectsWithComponent<T>() where T : class

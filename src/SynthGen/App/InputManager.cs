@@ -24,6 +24,9 @@ public class InputManager
 
     private Vector2 _lastMouse;
     private float _scrollAccum;
+    
+    // Key press tracking (event-based, bypasses ImGui focus)
+    private readonly HashSet<Key> _keysJustPressed = new();
 
     public InputManager(IInputContext input)
     {
@@ -36,6 +39,7 @@ public class InputManager
         if (_input.Keyboards.Count > 0)
         {
             _keyboard = _input.Keyboards[0];
+            _keyboard.KeyDown += (_, key, _) => _keysJustPressed.Add(key);
         }
     }
 
@@ -62,6 +66,12 @@ public class InputManager
             CtrlHeld = _keyboard.IsKeyPressed(Key.ControlLeft) || _keyboard.IsKeyPressed(Key.ControlRight);
         }
     }
+
+    /// <summary>Returns true if the key was pressed this frame (event-based, works even when ImGui has focus).</summary>
+    public bool WasKeyJustPressed(Key key) => _keysJustPressed.Contains(key);
+    
+    /// <summary>Call at end of frame to clear single-press state.</summary>
+    public void EndFrame() => _keysJustPressed.Clear();
 
     public bool IsKeyPressed(Key key)
     {

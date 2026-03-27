@@ -12,6 +12,12 @@ public class SceneObject
     public bool IsSelected { get; set; }
     public SceneObject? Parent { get; set; }
     public List<SceneObject> Children { get; set; } = new();
+
+    /// <summary>When true, object randomizers skip this object and all its children.</summary>
+    public bool ExcludeFromRandomization { get; set; }
+
+    /// <summary>Body part group name for keypoint annotation (e.g., "Head", "Left Arm").</summary>
+    public string BodyPartGroup { get; set; } = "";
  
     public void AddChild(SceneObject child)
     {

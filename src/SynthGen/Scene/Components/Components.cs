@@ -57,18 +57,30 @@ public class AnimationPlayerComponent
 {
     public List<AnimationClip> Clips = new();
     public int CurrentClipIndex;
-    public float PlaybackTime;
+    public float PlaybackTime; // in seconds
     public bool IsPlaying;
     public bool Loop = true;
 
+    /// <summary>
+    /// Duration of the currently active skeletal animation clip, in seconds.
+    /// Set from SkeletalAnimationClip at import time (Duration / TicksPerSecond).
+    /// </summary>
+    public float ClipDurationSeconds;
+
     public void Update(float dt)
     {
-        if (!IsPlaying || Clips.Count == 0) return;
-        var clip = Clips[CurrentClipIndex];
+        if (!IsPlaying) return;
+
+        // Determine duration: prefer skeletal clip duration, fallback to legacy clips
+        float duration = ClipDurationSeconds;
+        if (duration <= 0 && Clips.Count > 0 && CurrentClipIndex < Clips.Count)
+            duration = Clips[CurrentClipIndex].Duration;
+        if (duration <= 0) return;
+
         PlaybackTime += dt;
-        if (PlaybackTime >= clip.Duration)
+        if (PlaybackTime >= duration)
         {
-            PlaybackTime = Loop ? PlaybackTime % clip.Duration : clip.Duration;
+            PlaybackTime = Loop ? PlaybackTime % duration : duration;
             if (!Loop) IsPlaying = false;
         }
     }

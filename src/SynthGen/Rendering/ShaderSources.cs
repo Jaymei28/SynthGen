@@ -61,6 +61,7 @@ uniform float uMetallic;
 uniform float uNormalScale;
 uniform vec3  uEmissiveColor;
 uniform float uEmissiveIntensity;
+uniform float uColorIntensity;
 
 uniform vec3  uCameraPos;
 uniform int   uHasTexture;
@@ -83,6 +84,7 @@ void main() {
         vec4 texColor = texture(uAlbedoTex, vUV);
         albedo *= pow(texColor.rgb, vec3(2.2)); // sRGB to Linear
     }
+    albedo *= uColorIntensity;
 
     // 2. Normal Mapping (TBN)
     vec3 N = normalize(vNormal);
@@ -121,8 +123,8 @@ void main() {
 
     vec3 color = ambient + diffuse + specular + emissive;
 
-    // Standard ACES-ish tone mapping + Gamma correction
-    color = color / (color + vec3(1.0));
+    // ACES Tone Mapping
+    color = (color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14);
     color = pow(color, vec3(1.0/2.2));
 
     FragColor = vec4(color, uBaseColor.a);
@@ -976,13 +978,24 @@ void main() {
     public const string OUTLINE_MASK_VERT = @"
 #version 450 core
 layout(location = 0) in vec3 aPos;
+layout(location = 4) in ivec4 aBoneIDs;
+layout(location = 5) in vec4 aWeights;
 
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
+uniform bool uHasSkinning;
+uniform mat4 uBones[100];
 
 void main() {
-    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+    mat4 skinMat = mat4(1.0);
+    if (uHasSkinning) {
+        skinMat = uBones[aBoneIDs.x] * aWeights.x +
+                  uBones[aBoneIDs.y] * aWeights.y +
+                  uBones[aBoneIDs.z] * aWeights.z +
+                  uBones[aBoneIDs.w] * aWeights.w;
+    }
+    gl_Position = uProjection * uView * uModel * skinMat * vec4(aPos, 1.0);
 }
 ";
 

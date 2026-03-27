@@ -11,6 +11,7 @@ using SynthGen.Randomizers.GlobalRandomizers;
 using SynthGen.Scene;
 using SynthGen.Scene.Components;
 using SynthGen.Physics;
+using SynthGen.Rendering;
 
 namespace SynthGen.UI;
 
@@ -49,6 +50,7 @@ public class UIManager
     private Annotation.AnnotationMode _annotationMode = Annotation.AnnotationMode.BoundingBox;
 
     private bool _uiLocked = false;
+    private float _preFocusDistance = -1f; // -1 = not focused
     private const float ToolbarHeight = 48f;
 
     public UIManager(Application app)
@@ -97,6 +99,29 @@ public class UIManager
         {
             _uiLocked = !_uiLocked;
             AddLog($"[UI] Layout {(_uiLocked ? "LOCKED" : "UNLOCKED")}");
+        }
+
+        // F = Focus on selected object (raw input, works from anywhere)
+        if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.F))
+        {
+            var sel = _app.Scene.SelectedObject;
+            var cam = _app.Scene.ActiveCamera;
+            if (sel != null && cam != null && !cam.IsFlyMode)
+            {
+                if (_preFocusDistance > 0)
+                {
+                    // Already focused — zoom back out
+                    cam.OrbitDistance = _preFocusDistance;
+                    _preFocusDistance = -1f;
+                }
+                else
+                {
+                    // Zoom in — save current distance first
+                    _preFocusDistance = cam.OrbitDistance;
+                    cam.OrbitTarget = sel.Transform.Position;
+                    cam.OrbitDistance = MathF.Max(cam.OrbitDistance * 0.3f, 3f);
+                }
+            }
         }
 
         SetupDockspace();
@@ -264,6 +289,38 @@ public class UIManager
     {
         ImGui.Begin("Scene Hierarchy", GetWindowFlags());
 
+        // Ctrl+G Shortcut: Group selected objects under a new parent node
+        bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
+        bool isG = ImGui.IsKeyPressed(ImGuiKey.G, false) || _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.G);
+        
+        if (!ImGui.GetIO().WantTextInput && isCtrl && isG)
+        {
+            if (_app.Scene.SelectedObjects.Count > 1)
+            {
+                var groupObj = new SceneObject { Name = "Group" };
+                
+                var firstParent = _app.Scene.SelectedObjects[0].Parent;
+                bool sameParent = _app.Scene.SelectedObjects.All(o => o.Parent == firstParent);
+
+                if (sameParent && firstParent != null)
+                {
+                    firstParent.AddChild(groupObj);
+                }
+                
+                _app.Scene.AddObject(groupObj);
+
+                var toMove = _app.Scene.SelectedObjects.ToList();
+                foreach (var obj in toMove)
+                {
+                    if (obj.Parent != null) obj.Parent.Children.Remove(obj);
+                    groupObj.AddChild(obj);
+                }
+
+                _app.Scene.SelectedObject = groupObj;
+                AddLog($"[Scene] Grouped {toMove.Count} objects under new parent '{groupObj.Name}'");
+            }
+        }
+
         // Only render root-level objects (no parent), children are drawn recursively
         foreach (var obj in _app.Scene.Objects)
         {
@@ -288,13 +345,21 @@ public class UIManager
 
     private void RenderSceneNode(SceneObject obj)
     {
+        // ── HIDDEN SYSTEM NODES ──
+        if (obj.Name.Contains("$AssimpFbx$"))
+        {
+            foreach (var child in obj.Children)
+                RenderSceneNode(child);
+            return;
+        }
+
         // Determine icon
         string icon = obj.Children.Count > 0 ? "[P]" : "[M]";
         if (obj.HasComponent<LightComponent>()) icon = "[L]";
         if (obj is Camera) icon = "[C]";
         if (obj.HasComponent<MeshRendererComponent>() && obj.Children.Count > 0) icon = "[P]";
 
-        bool isSelected = _app.Scene.SelectedObject == obj;
+        bool isSelected = _app.Scene.SelectedObjects.Contains(obj);
         bool hasChildren = obj.Children.Count > 0;
 
         if (hasChildren)
@@ -306,7 +371,24 @@ public class UIManager
             if (obj.Parent == null) flags |= ImGuiTreeNodeFlags.DefaultOpen;
 
             bool open = ImGui.TreeNodeEx($"{icon} {obj.Name}##{obj.GetHashCode()}", flags);
-            if (ImGui.IsItemClicked()) _app.Scene.SelectedObject = obj;
+            if (ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                // Accept ImGui's internal modifier state OR Silk.NET's direct hardware state
+                bool isShift = ImGui.GetIO().KeyShift || _app.Input.ShiftHeld || ImGui.IsKeyDown(ImGuiKey.ModShift);
+                bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
+                
+                if (isShift || isCtrl)
+                {
+                    if (isSelected) _app.Scene.SelectedObjects.Remove(obj);
+                    else _app.Scene.SelectedObjects.Add(obj);
+                    AddLog($"[Hierarchy] Multi-Select: {obj.Name}. Total selected: {_app.Scene.SelectedObjects.Count}");
+                }
+                else
+                {
+                    _app.Scene.SelectedObject = obj;
+                    AddLog($"[Hierarchy] Single-Select: {obj.Name}");
+                }
+            }
 
             if (open)
             {
@@ -322,7 +404,23 @@ public class UIManager
             if (isSelected) flags |= ImGuiTreeNodeFlags.Selected;
 
             ImGui.TreeNodeEx($"{icon} {obj.Name}##{obj.GetHashCode()}", flags);
-            if (ImGui.IsItemClicked()) _app.Scene.SelectedObject = obj;
+            if (ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                bool isShift = ImGui.GetIO().KeyShift || _app.Input.ShiftHeld || ImGui.IsKeyDown(ImGuiKey.ModShift);
+                bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
+                
+                if (isShift || isCtrl)
+                {
+                    if (isSelected) _app.Scene.SelectedObjects.Remove(obj);
+                    else _app.Scene.SelectedObjects.Add(obj);
+                    AddLog($"[Hierarchy] Multi-Select: {obj.Name}. Total selected: {_app.Scene.SelectedObjects.Count}");
+                }
+                else
+                {
+                    _app.Scene.SelectedObject = obj;
+                    AddLog($"[Hierarchy] Single-Select: {obj.Name}");
+                }
+            }
         }
     }
 
@@ -454,22 +552,48 @@ public class UIManager
                 {
                     var color = _app.Renderer.PickSegmentationColor((int)localMouse.X, (int)localMouse.Y);
                     var found = FindObjectBySegColor(color);
+                    
+                    // Group picking logic: Select the topmost manually-created group parent
+                    // This makes grouped items "stick together" when clicked in the 3D viewport
+                    while (found != null && found.Parent != null && found.Parent.Name.StartsWith("Group"))
+                    {
+                        found = found.Parent;
+                    }
+                    
+                    bool isShift = ImGui.GetIO().KeyShift || _app.Input.ShiftHeld || ImGui.IsKeyDown(ImGuiKey.ModShift);
+                    bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
+
                     if (found != null)
                     {
-                        AddLog($"[Scene] Selected: {found.Name}");
-                        _app.Scene.SelectedObject = found;
-                        sel = found;
-                        if (_manipMode != ManipulationMode.None)
+                        if (isShift || isCtrl)
                         {
-                            StartManipulation(found, _manipMode);
+                            if (_app.Scene.SelectedObjects.Contains(found))
+                                _app.Scene.SelectedObjects.Remove(found);
+                            else
+                                _app.Scene.SelectedObjects.Add(found);
+                            AddLog($"[Scene] Multi-Selected: {found.Name}. Total selected: {_app.Scene.SelectedObjects.Count}");
+                        }
+                        else
+                        {
+                            _app.Scene.SelectedObject = found;
+                            AddLog($"[Scene] Selected: {found.Name}");
+                        }
+                        
+                        sel = _app.Scene.SelectedObject; // Update local var for manipulation
+                        if (_manipMode != ManipulationMode.None && sel != null)
+                        {
+                            StartManipulation(sel, _manipMode);
                             _startedByMouse = true;
                         }
                     }
                     else
                     {
-                        // Deselect if clicking background
-                        _app.Scene.SelectedObject = null;
-                        sel = null;
+                        if (!isShift && !isCtrl)
+                        {
+                            // Deselect if clicking background without modifiers
+                            _app.Scene.SelectedObject = null;
+                            sel = null;
+                        }
                     }
                 }
             }
@@ -606,23 +730,88 @@ public class UIManager
         Vector3[] axes = { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ };
         Vector4[] colors = { new(1, 0, 0, 1), new(0, 1, 0, 1), new(0, 0, 1, 1) };
         string[] labels = { "X", "Y", "Z" };
+        
+        // View presets: (yaw, pitch) - matching how OrbitYaw/OrbitPitch work
+        // X → Front view, Y → Top view, Z → Right view
+        (float yaw, float pitch)[] viewPresets = {
+            (90f, 0f),    // X: Front view (looking from +X)
+            (0f, 89f),    // Y: Top view (looking down)
+            (0f, 0f),     // Z: Right view (looking from +Z)
+        };
+
+        Vector2[] endPositions = new Vector2[3];
 
         for (int i = 0; i < 3; i++)
         {
-            // Transform axis to view space
-            // Matrix4x4 is row-major in .NET? No, column-major components but used as transform.
-            // view contains camera orientation.
             Vector3 worldAxis = axes[i];
             Vector3 viewAxis = Vector3.TransformNormal(worldAxis, view);
             
-            // Project to 2D (y-up to y-down)
             Vector2 endPos = center + new Vector2(viewAxis.X, -viewAxis.Y) * length;
+            endPositions[i] = endPos;
             
             drawList.AddLine(center, endPos, ImGui.GetColorU32(colors[i]), 2f);
-            drawList.AddText(endPos + new Vector2(2, 2), ImGui.GetColorU32(colors[i]), labels[i]);
+            
+            // Draw label as clickable circle + text
+            var labelPos = endPos + new Vector2(-6, -8);
+            var textSize = ImGui.CalcTextSize(labels[i]);
+            var labelCenter = endPos + new Vector2(textSize.X / 2, textSize.Y / 2 - 4);
+
+            // Check if mouse is near this label (click detection)
+            var mousePos = ImGui.GetMousePos();
+            float dist = Vector2.Distance(mousePos, labelCenter);
+            bool hovered = dist < 14f;
+
+            if (hovered)
+            {
+                // Highlight on hover
+                drawList.AddCircleFilled(labelCenter, 12f, ImGui.GetColorU32(new Vector4(0.3f, 0.3f, 0.3f, 0.6f)));
+                
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+                {
+                    cam.OrbitYaw = viewPresets[i].yaw;
+                    cam.OrbitPitch = viewPresets[i].pitch;
+                    // Focus on selected object if any
+                    var sel = _app.Scene.SelectedObject;
+                    if (sel != null) cam.OrbitTarget = sel.Transform.Position;
+                }
+            }
+            
+            drawList.AddText(labelPos, ImGui.GetColorU32(colors[i]), labels[i]);
         }
         
+        // Draw center dot (click to reset to default perspective)
+        var centerMouseDist = Vector2.Distance(ImGui.GetMousePos(), center);
+        if (centerMouseDist < 8f)
+        {
+            drawList.AddCircleFilled(center, 6f, ImGui.GetColorU32(new Vector4(0.4f, 0.4f, 0.4f, 0.6f)));
+            if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                cam.OrbitYaw = 30f;
+                cam.OrbitPitch = 25f;
+            }
+        }
         drawList.AddCircleFilled(center, 3f, ImGui.GetColorU32(Vector4.One));
+        
+        // Bottom view label (-Y) below the gizmo
+        Vector3 negYView = Vector3.TransformNormal(-Vector3.UnitY, view);
+        Vector2 negYEnd = center + new Vector2(negYView.X, -negYView.Y) * length;
+        
+        var negYLabelPos = negYEnd + new Vector2(-8, -4);
+        var negYMouseDist = Vector2.Distance(ImGui.GetMousePos(), negYEnd);
+        
+        if (negYMouseDist < 14f)
+        {
+            drawList.AddCircleFilled(negYEnd, 12f, ImGui.GetColorU32(new Vector4(0.3f, 0.3f, 0.3f, 0.6f)));
+            if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                cam.OrbitYaw = 0f;
+                cam.OrbitPitch = -89f; // Bottom view (looking up)
+                var sel = _app.Scene.SelectedObject;
+                if (sel != null) cam.OrbitTarget = sel.Transform.Position;
+            }
+        }
+        drawList.AddLine(center, negYEnd, ImGui.GetColorU32(new Vector4(0, 0.5f, 0, 0.5f)), 1.5f);
+        drawList.AddText(negYLabelPos, ImGui.GetColorU32(new Vector4(0, 0.5f, 0, 0.8f)), "-Y");
     }
 
     private void DrawObjectGizmo()
@@ -635,10 +824,6 @@ public class UIManager
         Vector3 worldPos = sel.Transform.Position;
         
         if (!WorldToScreen(worldPos, out Vector2 screenOrigin)) return;
-
-        // Selection ring (Unity-style orange outline)
-        drawList.AddCircle(screenOrigin, 25, ImGui.GetColorU32(new Vector4(1, 0.6f, 0, 1)), 32, 2f);
-        drawList.AddCircleFilled(screenOrigin, 4, ImGui.GetColorU32(Vector4.One));
 
         if (_manipMode == ManipulationMode.None) return;
 
@@ -938,11 +1123,16 @@ public class UIManager
             ImGui.Text($"Instance ID: {label.InstanceID}");
         }
 
-        // ── Material ──
+        // ── Material & Textures ──
         var mr = sel.GetComponent<MeshRendererComponent>();
-        if (mr != null && ImGui.CollapsingHeader("Material", ImGuiTreeNodeFlags.DefaultOpen))
+        // Find first mesh renderer in hierarchy to show current texture names
+        var firstMr = mr ?? FindFirstMeshRenderer(sel);
+        
+        bool hasMaterialOrChildren = firstMr != null; // Show if we or any child has a mesh
+        
+        if (hasMaterialOrChildren && ImGui.CollapsingHeader("Material", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            if (mr.Mesh != null)
+            if (mr != null && mr.Mesh != null)
             {
                 ImGui.Text($"Mesh: {Path.GetFileName(mr.Mesh.SourcePath)}");
                 ImGui.Text($"Tris: {mr.Mesh.IndexCount / 3}");
@@ -960,26 +1150,29 @@ public class UIManager
                 ImGui.Separator();
             }
 
-            ImGui.ColorEdit4("Base Color", ref mr.Material.BaseColor);
-            ImGui.SliderFloat("Smoothness", ref mr.Material.Smoothness, 0, 1);
-            ImGui.SliderFloat("Metallic", ref mr.Material.Metallic, 0, 1);
-            ImGui.DragFloat("Normal Scale", ref mr.Material.NormalScale, 0.01f, 0, 8);
-            
-            if (ImGui.CollapsingHeader("Emission"))
+            if (mr != null)
             {
-                ImGui.ColorEdit3("Emissive Color", ref mr.Material.EmissiveColor);
-                ImGui.DragFloat("Emissive Intensity", ref mr.Material.EmissiveIntensity, 0.1f, 0, 100);
+                ImGui.ColorEdit4("Base Color", ref mr.Material.BaseColor);
+                ImGui.SliderFloat("Smoothness", ref mr.Material.Smoothness, 0, 1);
+                ImGui.SliderFloat("Metallic", ref mr.Material.Metallic, 0, 1);
+                ImGui.DragFloat("Normal Scale", ref mr.Material.NormalScale, 0.01f, 0, 8);
+                
+                if (ImGui.CollapsingHeader("Emission"))
+                {
+                    ImGui.ColorEdit3("Emissive Color", ref mr.Material.EmissiveColor);
+                    ImGui.DragFloat("Emissive Intensity", ref mr.Material.EmissiveIntensity, 0.1f, 0, 100);
+                }
+
+                ImGui.Checkbox("Visible", ref mr.Visible);
+                ImGui.Separator();
             }
 
-            ImGui.Checkbox("Visible", ref mr.Visible);
-
-            ImGui.Separator();
-            ImGui.Text("Texture Maps");
+            ImGui.Text("Texture Maps (Applies Recursively)");
 
             // --- Albedo Slot ---
             ImGui.Text("Albedo:");
             ImGui.SameLine();
-            string albedoName = mr.Material.AlbedoTexturePath != null ? Path.GetFileName(mr.Material.AlbedoTexturePath) : "None";
+            string albedoName = firstMr?.Material.AlbedoTexturePath != null ? Path.GetFileName(firstMr.Material.AlbedoTexturePath) : "None";
             if (ImGui.Button($"{albedoName}##Albedo", new Vector2(ImGui.GetContentRegionAvail().X - 60, 0))) { }
             ImGui.SameLine();
             if (ImGui.Button("Browse##Albedo"))
@@ -993,9 +1186,13 @@ public class UIManager
                     uint texId = _app.AssetManager.LoadTexture(destPath);
                     if (texId > 0)
                     {
-                        mr.Material.AlbedoTextureID = texId;
-                        mr.Material.AlbedoTexturePath = destPath;
-                        AddLog($"[Material] Applied Albedo: {fileName}");
+                        // Find the topmost root of this object's hierarchy
+                        var rootObj = sel;
+                        while (rootObj.Parent != null) rootObj = rootObj.Parent;
+
+                        // Apply to the root and all its descendants
+                        ApplyTextureRecursive(rootObj, texId, destPath, isAlbedo: true);
+                        AddLog($"[Material] Applied Albedo to {rootObj.Name} (Root) + all children: {fileName}");
                     }
                 }
             }
@@ -1003,7 +1200,7 @@ public class UIManager
             // --- Normal Slot ---
             ImGui.Text("Normal:");
             ImGui.SameLine();
-            string normalName = mr.Material.NormalTexturePath != null ? Path.GetFileName(mr.Material.NormalTexturePath) : "None";
+            string normalName = firstMr?.Material.NormalTexturePath != null ? Path.GetFileName(firstMr.Material.NormalTexturePath) : "None";
             if (ImGui.Button($"{normalName}##Normal", new Vector2(ImGui.GetContentRegionAvail().X - 60, 0))) { }
             ImGui.SameLine();
             if (ImGui.Button("Browse##Normal"))
@@ -1017,11 +1214,47 @@ public class UIManager
                     uint texId = _app.AssetManager.LoadTexture(destPath);
                     if (texId > 0)
                     {
-                        mr.Material.NormalTextureID = texId;
-                        mr.Material.NormalTexturePath = destPath;
-                        AddLog($"[Material] Applied Normal: {fileName}");
+                        // Find the topmost root of this object's hierarchy
+                        var rootObj = sel;
+                        while (rootObj.Parent != null) rootObj = rootObj.Parent;
+
+                        // Apply to the root and all its descendants
+                        ApplyTextureRecursive(rootObj, texId, destPath, isAlbedo: false);
+                        AddLog($"[Material] Applied Normal to {rootObj.Name} (Root) + all children: {fileName}");
                     }
                 }
+            }
+
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+
+            // --- Smoothness ---
+            float smoothness = firstMr?.Material.Smoothness ?? 0.5f;
+            if (ImGui.SliderFloat("Smoothness", ref smoothness, 0f, 1f))
+            {
+                ApplyMaterialPropertyRecursive(sel, m => m.Smoothness = smoothness);
+            }
+
+            // --- Metallic ---
+            float metallic = firstMr?.Material.Metallic ?? 0.0f;
+            if (ImGui.SliderFloat("Metallic", ref metallic, 0f, 1f))
+            {
+                ApplyMaterialPropertyRecursive(sel, m => m.Metallic = metallic);
+            }
+
+            // --- Normal Scale ---
+            float nScale = firstMr?.Material.NormalScale ?? 1.0f;
+            if (ImGui.SliderFloat("Normal Scale", ref nScale, 0f, 5f))
+            {
+                ApplyMaterialPropertyRecursive(sel, m => m.NormalScale = nScale);
+            }
+
+            // --- Color Intensity ---
+            float cIntensity = firstMr?.Material.ColorIntensity ?? 1.0f;
+            if (ImGui.SliderFloat("Color Intensity", ref cIntensity, 0f, 5f))
+            {
+                ApplyMaterialPropertyRecursive(sel, m => m.ColorIntensity = cIntensity);
             }
         }
 
@@ -1064,32 +1297,41 @@ public class UIManager
         }
 
         // ── Animations ──
-        var anim = sel.GetComponent<AnimationPlayerComponent>();
-        if (anim != null && mr?.Mesh != null && mr.Mesh.Clips.Count > 0 && ImGui.CollapsingHeader("Animations", ImGuiTreeNodeFlags.DefaultOpen))
+        var animObj = FindFirstAnimatedObject(sel);
+        if (animObj != null && ImGui.CollapsingHeader("Animations", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            ImGui.Text($"Available Tracks: {mr.Mesh.Clips.Count}");
+            var anim = animObj.GetComponent<AnimationPlayerComponent>()!;
+            var animMr = animObj.GetComponent<MeshRendererComponent>()!;
             
-            string[] clipNames = new string[mr.Mesh.Clips.Count];
-            for (int i = 0; i < mr.Mesh.Clips.Count; i++) clipNames[i] = string.IsNullOrEmpty(mr.Mesh.Clips[i].Name) ? $"Track {i}" : mr.Mesh.Clips[i].Name;
+            ImGui.Text($"Available Tracks: {animMr.Mesh.Clips.Count}");
+            
+            string[] clipNames = new string[animMr.Mesh.Clips.Count];
+            for (int i = 0; i < animMr.Mesh.Clips.Count; i++) clipNames[i] = string.IsNullOrEmpty(animMr.Mesh.Clips[i].Name) ? $"Track {i}" : animMr.Mesh.Clips[i].Name;
             
             int current = anim.CurrentClipIndex;
             if (ImGui.Combo("Clip", ref current, clipNames, clipNames.Length))
             {
                 anim.CurrentClipIndex = current;
                 anim.PlaybackTime = 0;
+                SyncAnimationState(animObj, anim);
             }
 
+            bool wasPlaying = anim.IsPlaying;
             ImGui.Checkbox("Play", ref anim.IsPlaying);
             ImGui.SameLine();
+            bool wasLoop = anim.Loop;
             ImGui.Checkbox("Loop", ref anim.Loop);
+            if (anim.IsPlaying != wasPlaying || anim.Loop != wasLoop)
+                SyncAnimationState(animObj, anim);
             
-            float duration = mr.Mesh.Clips[current].Duration / mr.Mesh.Clips[current].TicksPerSecond;
-            float time = anim.PlaybackTime / mr.Mesh.Clips[current].TicksPerSecond;
-            ImGui.ProgressBar(time / duration, new Vector2(-1, 0), $"{time:F2}s / {duration:F2}s");
+            float duration = animMr.Mesh.Clips[current].Duration / animMr.Mesh.Clips[current].TicksPerSecond;
+            float time = anim.PlaybackTime;
+            ImGui.ProgressBar(time / Math.Max(duration, 0.001f), new Vector2(-1, 0), $"{time:F2}s / {duration:F2}s");
             
-            if (ImGui.SliderFloat("Time", ref anim.PlaybackTime, 0, mr.Mesh.Clips[current].Duration))
+            if (ImGui.SliderFloat("Time", ref anim.PlaybackTime, 0, anim.ClipDurationSeconds))
             {
                 anim.IsPlaying = false;
+                SyncAnimationState(animObj, anim);
             }
         }
 
@@ -1106,7 +1348,44 @@ public class UIManager
         {
             ImGui.TextColored(new Vector4(0.4f, 1f, 0.4f, 1), "[ Label Active ]");
         }
- 
+
+        // ── Body Part Group ──
+        ImGui.Separator();
+        ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1), "Body Part Group");
+        
+        var groupNames = SynthGen.Scene.Components.BodyPartGroups.GetDropdownNames();
+        int currentGroupIdx = SynthGen.Scene.Components.BodyPartGroups.GetIndex(sel.BodyPartGroup);
+        if (ImGui.Combo("Group", ref currentGroupIdx, groupNames, groupNames.Length))
+        {
+            sel.BodyPartGroup = SynthGen.Scene.Components.BodyPartGroups.GetName(currentGroupIdx);
+            AddLog($"[Scene] Set '{sel.Name}' group = '{sel.BodyPartGroup}'");
+        }
+
+        // Show color preview
+        var groupColor = SynthGen.Scene.Components.BodyPartGroups.GetColor(sel.BodyPartGroup);
+        if (groupColor.HasValue)
+        {
+            var c = groupColor.Value;
+            ImGui.SameLine();
+            ImGui.ColorButton("##grpclr", new Vector4(c.X, c.Y, c.Z, 1));
+        }
+
+        if (ImGui.Button("Apply Group to Children", new Vector2(-1, 0)))
+        {
+            ApplyGroupToChildren(sel, sel.BodyPartGroup);
+            AddLog($"[Scene] Applied group '{sel.BodyPartGroup}' to all children of '{sel.Name}'");
+        }
+
+        // ── Randomization ──
+        ImGui.Separator();
+        bool exclude = sel.ExcludeFromRandomization;
+        if (ImGui.Checkbox("Exclude from Randomization", ref exclude))
+        {
+            sel.ExcludeFromRandomization = exclude;
+        }
+        ImGui.SameLine();
+        HelpMarker("When enabled, position/rotation/scale/texture randomizers will skip this object and all its children.");
+
         if (ImGui.Button("Add Buoyancy") && buoy == null)
         {
             sel.AddComponent(new BuoyantBodyComponent());
@@ -1250,6 +1529,24 @@ public class UIManager
         ImGui.Checkbox("YOLO", ref yolo); cap.ExportYOLO = yolo;
         ImGui.SameLine();
         ImGui.Checkbox("COCO", ref coco); cap.ExportCOCO = coco;
+
+        ImGui.Separator();
+        ImGui.TextColored(new Vector4(1, 0.8f, 0.3f, 1), "Animation Capture");
+        bool animCapture = cap.AnimatedCapture;
+        ImGui.Checkbox("Animated Capture", ref animCapture); cap.AnimatedCapture = animCapture;
+        if (animCapture)
+        {
+            int subFrames = cap.SubFramesPerIteration;
+            ImGui.SliderInt("Sub-frames / Iteration", ref subFrames, 1, 60);
+            cap.SubFramesPerIteration = subFrames;
+
+            float animDur = cap.AnimationDuration;
+            ImGui.SliderFloat("Anim Duration (s)", ref animDur, 0.1f, 10f);
+            cap.AnimationDuration = animDur;
+
+            ImGui.TextColored(new Vector4(0.5f, 0.8f, 1f, 1), 
+                $"Total images: {cap.TotalFrames * cap.SubFramesPerIteration}");
+        }
 
         ImGui.Separator();
         if (cap.IsGenerating)
@@ -1497,6 +1794,63 @@ public class UIManager
         }
     }
 
+    private void ApplyTextureRecursive(SceneObject obj, uint texId, string texPath, bool isAlbedo)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr != null)
+        {
+            if (isAlbedo)
+            {
+                mr.Material.AlbedoTextureID = texId;
+                mr.Material.AlbedoTexturePath = texPath;
+            }
+            else
+            {
+                mr.Material.NormalTextureID = texId;
+                mr.Material.NormalTexturePath = texPath;
+            }
+        }
+
+        foreach (var child in obj.Children)
+        {
+            ApplyTextureRecursive(child, texId, texPath, isAlbedo);
+        }
+    }
+
+    private void ApplyMaterialPropertyRecursive(SceneObject obj, Action<Rendering.Material> action)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr != null) action(mr.Material);
+        foreach (var child in obj.Children) ApplyMaterialPropertyRecursive(child, action);
+    }
+
+    private MeshRendererComponent? FindFirstMeshRenderer(SceneObject obj)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr != null) return mr;
+
+        foreach (var child in obj.Children)
+        {
+            var childMr = FindFirstMeshRenderer(child);
+            if (childMr != null) return childMr;
+        }
+        return null;
+    }
+
+    private SceneObject? FindFirstAnimatedObject(SceneObject obj)
+    {
+        var anim = obj.GetComponent<AnimationPlayerComponent>();
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (anim != null && mr?.Mesh != null && mr.Mesh.Clips.Count > 0) return obj;
+
+        foreach (var child in obj.Children)
+        {
+            var found = FindFirstAnimatedObject(child);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
     private void DrawManipulationOverlay()
     {
         var drawList = ImGui.GetWindowDrawList();
@@ -1506,5 +1860,52 @@ public class UIManager
         var size = ImGui.CalcTextSize(msg);
         drawList.AddRectFilled(pos, pos + new Vector2(size.X + 20, 30), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f)));
         drawList.AddText(pos + new Vector2(10, 5), ImGui.GetColorU32(new Vector4(1, 1, 0, 1)), msg);
+    }
+
+    private void ApplyGroupToChildren(SceneObject obj, string groupName)
+    {
+        obj.BodyPartGroup = groupName;
+        foreach (var child in obj.Children)
+            ApplyGroupToChildren(child, groupName);
+    }
+
+    /// <summary>
+    /// Syncs animation state (play/pause/loop/time/clip) from the source to all
+    /// AnimationPlayerComponents in the parent hierarchy (siblings + descendants).
+    /// </summary>
+    private void SyncAnimationState(SceneObject source, AnimationPlayerComponent sourceAnim)
+    {
+        // Find the top-level parent that owns the model
+        var root = source;
+        while (root.Parent != null && root.Parent.Parent != null) root = root.Parent;
+        SyncAnimRecursive(root, sourceAnim);
+    }
+
+    private void SyncAnimRecursive(SceneObject obj, AnimationPlayerComponent source)
+    {
+        var anim = obj.GetComponent<AnimationPlayerComponent>();
+        if (anim != null && anim != source)
+        {
+            anim.IsPlaying = source.IsPlaying;
+            anim.Loop = source.Loop;
+            anim.PlaybackTime = source.PlaybackTime;
+            anim.CurrentClipIndex = source.CurrentClipIndex;
+            anim.ClipDurationSeconds = source.ClipDurationSeconds;
+        }
+        foreach (var child in obj.Children)
+            SyncAnimRecursive(child, source);
+    }
+
+    private static void HelpMarker(string desc)
+    {
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 20f);
+            ImGui.TextUnformatted(desc);
+            ImGui.PopTextWrapPos();
+            ImGui.EndTooltip();
+        }
     }
 }

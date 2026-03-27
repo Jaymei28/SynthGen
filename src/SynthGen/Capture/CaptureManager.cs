@@ -29,11 +29,17 @@ public class CaptureManager
     public bool CaptureSeg { get; set; } = true;
     public bool CaptureDepth { get; set; } = true;
 
+    // Animation capture settings
+    public bool AnimatedCapture { get; set; } = true;
+    public int SubFramesPerIteration { get; set; } = 10;
+    public float AnimationDuration { get; set; } = 2.0f;
+
     // Event for logging
     public event Action<string>? OnLog;
 
     private Annotation.COCOExporter? _cocoExporter;
     private bool _pendingCapture;
+    private int _totalCapturedImages;
 
     // Randomizer list — set externally by UI
     public List<Randomizers.RandomizerBase> ActiveRandomizers { get; set; } = new();
@@ -52,6 +58,7 @@ public class CaptureManager
         CompletedFrames = 0;
         IsGenerating = true;
         _pendingCapture = true;
+        _totalCapturedImages = 0;
 
         // Create output directories
         Directory.CreateDirectory(Path.Combine(OutputDirectory, "rgb"));
@@ -90,7 +97,7 @@ public class CaptureManager
         {
             FinalizeGeneration();
             IsGenerating = false;
-            OnLog?.Invoke($"[Capture] Generation complete! {TotalFrames} frames saved.");
+            OnLog?.Invoke($"[Capture] Generation complete! {TotalFrames} iterations, {_totalCapturedImages} images saved.");
             return;
         }
 
@@ -102,8 +109,39 @@ public class CaptureManager
                 randomizer.Randomize(_scene, rng);
         }
 
-        // Capture current frame. (Rendering happens at end of loop)
-        CaptureFrame(CompletedFrames);
+        if (AnimatedCapture)
+        {
+            // Animated mode: capture multiple sub-frames per iteration
+            int subFrames = Math.Max(1, SubFramesPerIteration);
+            float stepTime = AnimationDuration / subFrames;
+
+            for (int sf = 0; sf < subFrames; sf++)
+            {
+                float animTime = sf * stepTime;
+
+                // Advance all animation players to this time
+                foreach (var obj in _scene.Objects)
+                {
+                    var anim = obj.GetComponent<Scene.Components.AnimationPlayerComponent>();
+                    if (anim != null)
+                    {
+                        anim.PlaybackTime = animTime;
+                    }
+                }
+
+                // Re-render the scene at this animation pose
+                // (The renderer will pick up updated bone poses from the animation player)
+                CaptureFrame(_totalCapturedImages);
+                _totalCapturedImages++;
+            }
+        }
+        else
+        {
+            // Standard mode: single snapshot per iteration
+            CaptureFrame(_totalCapturedImages);
+            _totalCapturedImages++;
+        }
+
         CompletedFrames++;
     }
 

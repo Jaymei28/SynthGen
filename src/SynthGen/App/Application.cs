@@ -186,7 +186,7 @@ public class Application
         }
 
         // Pass selection to renderer for highlight
-        _renderer.SelectedObject = _scene.SelectedObject;
+        _renderer.SelectedObjects = _scene.SelectedObjects;
 
         // Render 3D scene to framebuffers
         _renderer.RenderScene(_scene, _ocean, _totalTime);
@@ -200,6 +200,9 @@ public class Application
         _uiManager.Render();
 
         _imguiController.Render();
+        
+        // Clear per-frame input state
+        _inputManager.EndFrame();
     }
 
     private void OnResize(Vector2D<int> size)

@@ -11,6 +11,7 @@ public class Material
     public float Smoothness = 0.5f;
     public float Metallic = 0.0f;
     public float NormalScale = 1.0f;
+    public float ColorIntensity = 1.0f;
     public Vector3 EmissiveColor = Vector3.Zero;
     public float EmissiveIntensity = 1.0f;
 
