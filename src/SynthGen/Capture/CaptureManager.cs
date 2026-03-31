@@ -4,6 +4,7 @@ using SixLabors.ImageSharp.PixelFormats;
 using SynthGen.Rendering;
 using SynthGen.Scene;
 using SynthGen.Scene.Components;
+using System.Numerics;
 
 namespace SynthGen.Capture;
 
@@ -33,6 +34,11 @@ public class CaptureManager
     public bool AnimatedCapture { get; set; } = true;
     public int SubFramesPerIteration { get; set; } = 10;
     public float AnimationDuration { get; set; } = 2.0f;
+
+    // Keypoint pose estimation settings
+    public bool ExportKeypointPose { get; set; } = true;
+    /// <summary>Bone-to-keypoint mapping. Key = COCO keypoint index (0-16), Value = skeleton bone name.</summary>
+    public Dictionary<int, string> KeypointBoneMap { get; set; } = new();
 
     // Event for logging
     public event Action<string>? OnLog;
@@ -65,6 +71,8 @@ public class CaptureManager
         Directory.CreateDirectory(Path.Combine(OutputDirectory, "seg"));
         Directory.CreateDirectory(Path.Combine(OutputDirectory, "depth"));
         Directory.CreateDirectory(Path.Combine(OutputDirectory, "labels"));
+        if (ExportKeypointPose)
+            Directory.CreateDirectory(Path.Combine(OutputDirectory, "keypoint_labels"));
 
         _cocoExporter = new Annotation.COCOExporter();
 
@@ -73,7 +81,13 @@ public class CaptureManager
         {
             var label = obj.GetComponent<LabelComponent>();
             if (label != null)
-                _cocoExporter.AddCategory(label.ClassID, label.ClassName);
+                _cocoExporter.AddCategory(label.ClassID, label.ClassName, ExportKeypointPose);
+        }
+
+        // Auto-map bones to keypoints if no mapping exists yet
+        if (ExportKeypointPose && KeypointBoneMap.Count == 0)
+        {
+            AutoMapKeypointsFromScene();
         }
 
         OnLog?.Invoke($"[Capture] Starting generation: {numFrames} frames → {OutputDirectory}");
@@ -177,6 +191,12 @@ public class CaptureManager
         }
 
         OnLog?.Invoke($"[Frame {frameIndex}] Captured RGB/Seg/Depth");
+
+        // Generate keypoint annotations
+        if (ExportKeypointPose)
+        {
+            GenerateKeypointAnnotations(frameIndex, frameName);
+        }
     }
 
     private void GenerateAnnotations(byte[] segPixels, int frameIndex, string frameName)
@@ -220,6 +240,68 @@ public class CaptureManager
         {
             _cocoExporter.Save(Path.Combine(OutputDirectory, "annotations.json"));
             OnLog?.Invoke("[Capture] COCO annotations saved.");
+        }
+
+        if (ExportKeypointPose)
+        {
+            OnLog?.Invoke($"[Capture] Keypoint pose labels saved to keypoint_labels/");
+        }
+    }
+
+    /// <summary>
+    /// Generates 2D keypoint annotations by projecting 3D bone positions through the camera.
+    /// </summary>
+    private void GenerateKeypointAnnotations(int frameIndex, string frameName)
+    {
+        var cam = _scene.ActiveCamera;
+        if (cam == null) return;
+
+        var view = cam.GetViewMatrix();
+        float aspect = (float)_renderer.Width / Math.Max(1, _renderer.Height);
+        var proj = cam.GetProjectionMatrix(aspect);
+
+        var annotations = Annotation.KeypointAnnotator.GenerateKeypoints(
+            _scene, view, proj, _renderer.Width, _renderer.Height, 
+            KeypointBoneMap.Count > 0 ? KeypointBoneMap : null);
+
+        if (annotations.Count > 0)
+        {
+            // YOLOv8-Pose format export
+            Annotation.YOLOPoseExporter.ExportFrame(
+                Path.Combine(OutputDirectory, "keypoint_labels", $"{frameName}.txt"),
+                annotations, _renderer.Width, _renderer.Height);
+
+            // COCO keypoint JSON
+            if (ExportCOCO && _cocoExporter != null)
+            {
+                _cocoExporter.AddKeypointFrame(frameIndex, $"rgb/{frameName}.png",
+                    _renderer.Width, _renderer.Height, annotations);
+            }
+
+            OnLog?.Invoke($"[Frame {frameIndex}] {annotations.Count} person(s), keypoints exported");
+        }
+    }
+
+    /// <summary>
+    /// Auto-discovers skeleton bones in the scene and maps them to COCO keypoints.
+    /// </summary>
+    private void AutoMapKeypointsFromScene()
+    {
+        foreach (var obj in _scene.Objects)
+        {
+            var mr = obj.GetComponent<MeshRendererComponent>();
+            if (mr?.Mesh == null || !mr.Mesh.HasSkinning || mr.Mesh.Skeleton == null) continue;
+
+            KeypointBoneMap = Annotation.KeypointRegistry.AutoMapBones(
+                mr.Mesh.Skeleton.BonesByName.Keys);
+            
+            if (KeypointBoneMap.Count > 0)
+            {
+                OnLog?.Invoke($"[Keypoints] Auto-mapped {KeypointBoneMap.Count}/17 bones to COCO keypoints");
+                foreach (var kvp in KeypointBoneMap)
+                    OnLog?.Invoke($"  [{kvp.Key}] {Annotation.KeypointRegistry.KeypointNames[kvp.Key]} → {kvp.Value}");
+                return;
+            }
         }
     }
 

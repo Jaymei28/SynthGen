@@ -142,6 +142,33 @@ public class AssetManager
                     }
                 }
             }
+
+            // ── Auto-scale and Auto-position: normalize FBX centimeter units to meters ──
+            // FBX files from Mixamo/Blender often use centimeters (100 units = 1 meter).
+            // Detect this by measuring the model's bounding box height and scale accordingly.
+            var bounds = ComputeModelBounds(flatList);
+            float scaleFactor = 1.0f;
+            
+            if (bounds.Height > 10f) // Taller than 10 units = likely centimeter scale
+            {
+                float targetHeight = 1.7f; // Average human height in meters
+                scaleFactor = targetHeight / bounds.Height;
+                rootObj.Transform.Scale = new Vector3(scaleFactor);
+                log?.Invoke($"[AssetManager] Auto-scaled model: {bounds.Height:F1} units → {targetHeight:F1}m (scale={scaleFactor:F4})");
+            }
+            else
+            {
+                log?.Invoke($"[AssetManager] Model height: {bounds.Height:F2} units (no rescale needed)");
+            }
+
+            // Offset the model so its lowest point rests precisely on the floor (Y = 0)
+            // min.Y could be negative if the pivot is at the waist (like many Mixamo characters)
+            if (bounds.MinY < -0.1f)
+            {
+                float yOffset = -bounds.MinY * scaleFactor;
+                rootObj.Transform.Position.Y = yOffset;
+                log?.Invoke($"[AssetManager] Applied Y-offset: {yOffset:F2}m to place feet on the ground.");
+            }
             
             return rootObj;
         }
@@ -150,6 +177,43 @@ public class AssetManager
             log?.Invoke($"[AssetManager] Fatal error: {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Computes the total height (Y-axis extent) of a model from all its meshes,
+    /// and also returns the minimum Y value (the lowest coordinate) so we can place it on the ground.
+    /// Used for auto-scaling and positioning imported FBX models.
+    /// </summary>
+    private (float Height, float MinY) ComputeModelBounds(List<Scene.SceneObject> flatList)
+    {
+        float minY = float.MaxValue, maxY = float.MinValue;
+        foreach (var obj in flatList)
+        {
+            var mr = obj.GetComponent<Scene.Components.MeshRendererComponent>();
+            if (mr?.Mesh == null) continue;
+            
+            var meshMin = mr.Mesh.BoundingBoxMin;
+            var meshMax = mr.Mesh.BoundingBoxMax;
+            
+            // Transform all 8 corners of the AABB by the node's world transform
+            Vector3[] corners = {
+                new(meshMin.X, meshMin.Y, meshMin.Z), new(meshMax.X, meshMin.Y, meshMin.Z), 
+                new(meshMax.X, meshMax.Y, meshMin.Z), new(meshMin.X, meshMax.Y, meshMin.Z),
+                new(meshMin.X, meshMin.Y, meshMax.Z), new(meshMax.X, meshMin.Y, meshMax.Z), 
+                new(meshMax.X, meshMax.Y, meshMax.Z), new(meshMin.X, meshMax.Y, meshMax.Z)
+            };
+            
+            var worldMatrix = obj.GetWorldMatrix();
+            foreach (var corner in corners)
+            {
+                var worldPos = Vector3.Transform(corner, worldMatrix);
+                minY = MathF.Min(minY, worldPos.Y);
+                maxY = MathF.Max(maxY, worldPos.Y);
+            }
+        }
+        
+        if (minY >= maxY) return (0f, 0f);
+        return (maxY - minY, minY);
     }
 
     private static readonly string[] _skipNames = { 

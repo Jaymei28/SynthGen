@@ -95,6 +95,39 @@ public static class YOLOExporter
 }
 
 /// <summary>
+/// Exports annotations in YOLOv8-Pose format.
+/// Format: class_id cx cy w h kp1_x kp1_y kp1_v kp2_x kp2_y kp2_v ... kp17_x kp17_y kp17_v
+/// </summary>
+public static class YOLOPoseExporter
+{
+    public static void ExportFrame(string outputPath, List<KeypointAnnotation> annotations, int imgWidth, int imgHeight)
+    {
+        using var writer = new StreamWriter(outputPath);
+        foreach (var ann in annotations)
+        {
+            // Bounding box in YOLO format (normalized center x, center y, width, height)
+            float cx = (ann.BBox[0] + ann.BBox[2] / 2f) / imgWidth;
+            float cy = (ann.BBox[1] + ann.BBox[3] / 2f) / imgHeight;
+            float w = ann.BBox[2] / imgWidth;
+            float h = ann.BBox[3] / imgHeight;
+
+            var parts = new List<string> { $"{ann.ClassID} {cx:F6} {cy:F6} {w:F6} {h:F6}" };
+
+            // 17 keypoints: x y visibility (normalized)
+            for (int i = 0; i < 17; i++)
+            {
+                var kp = ann.Keypoints[i];
+                float kx = kp.V > 0 ? kp.X / imgWidth : 0f;
+                float ky = kp.V > 0 ? kp.Y / imgHeight : 0f;
+                parts.Add($"{kx:F6} {ky:F6} {kp.V}");
+            }
+
+            writer.WriteLine(string.Join(" ", parts));
+        }
+    }
+}
+
+/// <summary>
 /// Exports annotations in COCO JSON format.
 /// </summary>
 public class COCOExporter
@@ -102,10 +135,17 @@ public class COCOExporter
     private readonly COCODataset _dataset = new();
     private int _annotationId = 1;
 
-    public void AddCategory(int id, string name)
+    public void AddCategory(int id, string name, bool withKeypoints = false)
     {
         if (_dataset.Categories.Any(c => c.Id == id)) return;
-        _dataset.Categories.Add(new COCOCategory { Id = id, Name = name });
+        var cat = new COCOCategory { Id = id, Name = name };
+        if (withKeypoints)
+        {
+            cat.Keypoints = KeypointRegistry.KeypointNames.ToList();
+            cat.Skeleton = KeypointRegistry.SkeletonEdges
+                .Select(e => new[] { e.Item1, e.Item2 }).ToList();
+        }
+        _dataset.Categories.Add(cat);
     }
 
     public void AddFrame(int frameId, string fileName, int width, int height, List<BBox2D> bboxes)
@@ -128,6 +168,48 @@ public class COCOExporter
                 BBox = new[] { (float)b.X1, (float)b.Y1, (float)(b.X2 - b.X1), (float)(b.Y2 - b.Y1) },
                 Area = b.Area,
                 IsCrowd = 0
+            });
+        }
+    }
+
+    /// <summary>
+    /// Adds keypoint annotations for a frame.
+    /// </summary>
+    public void AddKeypointFrame(int frameId, string fileName, int width, int height, List<KeypointAnnotation> annotations)
+    {
+        // Add image if not already added
+        if (!_dataset.Images.Any(i => i.Id == frameId))
+        {
+            _dataset.Images.Add(new COCOImage
+            {
+                Id = frameId,
+                FileName = fileName,
+                Width = width,
+                Height = height
+            });
+        }
+
+        foreach (var ann in annotations)
+        {
+            // Flatten keypoints: [x1, y1, v1, x2, y2, v2, ...]
+            var kpList = new List<float>();
+            for (int i = 0; i < 17; i++)
+            {
+                kpList.Add(ann.Keypoints[i].X);
+                kpList.Add(ann.Keypoints[i].Y);
+                kpList.Add(ann.Keypoints[i].V);
+            }
+
+            _dataset.Annotations.Add(new COCOAnnotation
+            {
+                Id = _annotationId++,
+                ImageId = frameId,
+                CategoryId = ann.ClassID,
+                BBox = ann.BBox,
+                Area = ann.BBox[2] * ann.BBox[3],
+                IsCrowd = 0,
+                KeypointsData = kpList,
+                NumKeypoints = ann.NumKeypoints
             });
         }
     }
@@ -163,6 +245,12 @@ public class COCOAnnotation
     [JsonPropertyName("bbox")] public float[] BBox { get; set; } = Array.Empty<float>();
     [JsonPropertyName("area")] public float Area { get; set; }
     [JsonPropertyName("iscrowd")] public int IsCrowd { get; set; }
+    [JsonPropertyName("keypoints")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<float>? KeypointsData { get; set; }
+    [JsonPropertyName("num_keypoints")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int NumKeypoints { get; set; }
 }
 
 public class COCOCategory
@@ -170,6 +258,12 @@ public class COCOCategory
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("supercategory")] public string SuperCategory { get; set; } = "object";
+    [JsonPropertyName("keypoints")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Keypoints { get; set; }
+    [JsonPropertyName("skeleton")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<int[]>? Skeleton { get; set; }
 }
  
 // ── Visual Verification (Debug Images) ──────────────────────────────────────

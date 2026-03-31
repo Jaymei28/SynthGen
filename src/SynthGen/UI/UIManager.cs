@@ -941,7 +941,7 @@ public class UIManager
         foreach (var obj in _app.Scene.Objects)
         {
             var label = obj.GetComponent<LabelComponent>();
-            if (label == null || !WorldToScreen(obj.Transform.Position, out Vector2 screenPos)) continue;
+            if (label == null || !WorldToScreen(obj.GetWorldMatrix().Translation, out Vector2 screenPos)) continue;
             
             // Draw 3D Box Wireframe
             var mr = obj.GetComponent<MeshRendererComponent>();
@@ -968,7 +968,17 @@ public class UIManager
     private void DrawOriented3DBox(SceneObject obj, Rendering.Mesh mesh, Vector3 baseColor)
     {
         var drawList = ImGui.GetWindowDrawList();
-        var model = obj.Transform.GetMatrix();
+        var model = obj.GetWorldMatrix();
+        
+        // Apply primary bone transform so the UI bounding box tracks animated meshes
+        if (mesh.HasSkinning && mesh.Skeleton != null && mesh.PrimaryBoneIndex >= 0)
+        {
+            var boneMatrices = mesh.Skeleton.GetFinalMatrices();
+            if (mesh.PrimaryBoneIndex < boneMatrices.Length)
+            {
+                model = boneMatrices[mesh.PrimaryBoneIndex] * model;
+            }
+        }
         
         Vector3 min = mesh.BoundingBoxMin;
         Vector3 max = mesh.BoundingBoxMax;
@@ -1706,7 +1716,10 @@ public class UIManager
             string fileName = Path.GetFileName(path);
             string destPath = Path.Combine(_app.AssetManager.ModelsPath, fileName);
             try {
-                if (!File.Exists(destPath)) File.Copy(path, destPath);
+                if (!string.Equals(path, destPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Copy(path, destPath, overwrite: true);
+                }
 
                 // Copy nearby textures too
                 string srcDir = Path.GetDirectoryName(path) ?? "";
@@ -1715,7 +1728,7 @@ public class UIManager
                 string[] possibleTexDirs = { srcDir, Path.Combine(srcDir, "textures"), Path.Combine(srcDir, "Textures") };
                 foreach (var texDir in possibleTexDirs)
                 {
-                    if (Directory.Exists(texDir))
+                    if (Directory.Exists(texDir) && !string.Equals(texDir, destDir, StringComparison.OrdinalIgnoreCase))
                     {
                         var files = Directory.GetFiles(texDir, "*.*")
                             .Where(f => f.EndsWith(".png") || f.EndsWith(".jpg") || f.EndsWith(".jpeg") || f.EndsWith(".tga"));
@@ -1723,7 +1736,10 @@ public class UIManager
                         {
                             string tName = Path.GetFileName(f);
                             string tDest = Path.Combine(destDir, tName); // Try to put them alongside the model
-                            if (!File.Exists(tDest)) File.Copy(f, tDest);
+                            if (!string.Equals(f, tDest, StringComparison.OrdinalIgnoreCase))
+                            {
+                                File.Copy(f, tDest, overwrite: true);
+                            }
                         }
                     }
                 }
