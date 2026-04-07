@@ -25,6 +25,7 @@ public class Application
     private Physics.OceanSimulation _ocean = null!;
     private Physics.BuoyancySystem _buoyancy = null!;
     private Capture.CaptureManager _captureManager = null!;
+    private Training.TrainingManager _trainingManager = null!;
     private UI.UIManager _uiManager = null!;
     private InputManager _inputManager = null!;
 
@@ -39,6 +40,7 @@ public class Application
     public Physics.OceanSimulation Ocean => _ocean;
     public Physics.BuoyancySystem Buoyancy => _buoyancy;
     public Capture.CaptureManager CaptureManager => _captureManager;
+    public Training.TrainingManager TrainingManager => _trainingManager;
     public InputManager Input => _inputManager;
 
     public float DeltaTime => _deltaTime;
@@ -84,6 +86,7 @@ public class Application
         _ocean = new Physics.OceanSimulation();
         _buoyancy = new Physics.BuoyancySystem(_ocean);
         _captureManager = new Capture.CaptureManager(_gl, _renderer, _scene, _ocean);
+        _trainingManager = new Training.TrainingManager();
         _inputManager = new InputManager(_input);
         _uiManager = new UI.UIManager(this);
 
@@ -155,6 +158,9 @@ public class Application
 
         // Update capture pipeline if generating
         _captureManager.Update(_deltaTime, _totalTime);
+
+        // Poll training process output
+        _trainingManager.Update();
 
         // Update all randomizers
         foreach (var r in _uiManager.AllRandomizers)

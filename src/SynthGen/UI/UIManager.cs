@@ -55,6 +55,10 @@ public class UIManager
 
     private SceneObject? _lastDeletedObject; // For simple one-step Undo
 
+    // Training panel state
+    private bool _showTrainingPanel = false;
+    private bool _showTrainingPrompt = false;
+    private int _generatedImageCount = 0;
 
     public UIManager(Application app)
     {
@@ -91,6 +95,7 @@ public class UIManager
         // Wire capture manager
         _app.CaptureManager.ActiveRandomizers = _allRandomizers;
         _app.CaptureManager.OnLog += msg => _logs.Add(msg);
+        _app.TrainingManager.OnLog += msg => _logs.Add(msg);
 
         AddLog("[SynthGen] UI initialized. Ready.");
     }
@@ -192,6 +197,8 @@ public class UIManager
         RenderRandomizerPanel();
         RenderOceanSettings();
         RenderCapturePanel();
+        if (_showTrainingPanel) RenderTrainingPanel();
+        RenderTrainingPrompt();
         RenderConsole();
     }
 
@@ -1782,6 +1789,183 @@ public class UIManager
         {
             ImGui.ProgressBar(cap.Progress, new Vector2(-1, 0),
                 $"{cap.CompletedFrames}/{cap.TotalFrames}");
+        }
+
+        ImGui.End();
+    }
+
+    // ═══ Training Prompt (Post-Generation) ═══════════════════════════════════
+    private void RenderTrainingPrompt()
+    {
+        // Detect when generation just completed
+        if (_app.CaptureManager.GenerationJustCompleted)
+        {
+            _app.CaptureManager.GenerationJustCompleted = false;
+            _generatedImageCount = _app.CaptureManager.LastImageCount;
+            _showTrainingPrompt = true;
+            ImGui.OpenPopup("TrainingPrompt");
+        }
+
+        // Keep the popup open if we're showing the prompt
+        if (_showTrainingPrompt && !ImGui.IsPopupOpen("TrainingPrompt"))
+            ImGui.OpenPopup("TrainingPrompt");
+
+        // Center the popup
+        var viewport = ImGui.GetMainViewport();
+        ImGui.SetNextWindowPos(viewport.WorkPos + viewport.WorkSize * 0.5f, ImGuiCond.Appearing, new Vector2(0.5f, 0.5f));
+        ImGui.SetNextWindowSize(new Vector2(420, 0));
+
+        if (ImGui.BeginPopupModal("TrainingPrompt", ref _showTrainingPrompt, ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove))
+        {
+            ImGui.TextColored(new Vector4(0.3f, 1f, 0.5f, 1f), "✅ Dataset Generation Complete!");
+            ImGui.Separator();
+            ImGui.Spacing();
+
+            ImGui.Text($"Generated {_generatedImageCount} images.");
+            ImGui.Text($"Output: {Path.GetFullPath(_app.CaptureManager.OutputDirectory)}");
+            ImGui.Spacing();
+
+            ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f), "Proceed to training?");
+            ImGui.Spacing();
+
+            float buttonWidth = 180;
+            float totalWidth = buttonWidth * 2 + ImGui.GetStyle().ItemSpacing.X;
+            ImGui.SetCursorPosX((ImGui.GetWindowWidth() - totalWidth) * 0.5f);
+
+            if (ImGui.Button("🚀 Yes, Train Now", new Vector2(buttonWidth, 35)))
+            {
+                _showTrainingPanel = true;
+                _showTrainingPrompt = false;
+                ImGui.CloseCurrentPopup();
+                AddLog("[UI] Training panel opened.");
+            }
+
+            ImGui.SameLine();
+
+            if (ImGui.Button("❌ No, Later", new Vector2(buttonWidth, 35)))
+            {
+                _showTrainingPrompt = false;
+                ImGui.CloseCurrentPopup();
+                AddLog("[UI] Training skipped. Open from View menu anytime.");
+            }
+
+            ImGui.EndPopup();
+        }
+    }
+
+    // ═══ Training Panel ══════════════════════════════════════════════════════
+    private void RenderTrainingPanel()
+    {
+        ImGui.Begin("Training", GetWindowFlags());
+
+        var tm = _app.TrainingManager;
+
+        // ── Status Bar ──
+        Vector4 statusColor = tm.Status switch
+        {
+            Training.TrainingManager.TrainStatus.Training => new Vector4(0.3f, 1f, 0.5f, 1f),
+            Training.TrainingManager.TrainStatus.Preparing => new Vector4(1f, 0.8f, 0.3f, 1f),
+            Training.TrainingManager.TrainStatus.Complete => new Vector4(0.3f, 0.8f, 1f, 1f),
+            Training.TrainingManager.TrainStatus.Failed => new Vector4(1f, 0.3f, 0.3f, 1f),
+            _ => new Vector4(0.6f, 0.6f, 0.6f, 1f)
+        };
+        ImGui.TextColored(statusColor, $"Status: {tm.Status}");
+
+        if (!string.IsNullOrEmpty(tm.CurrentEpochInfo))
+        {
+            ImGui.TextWrapped(tm.CurrentEpochInfo);
+        }
+
+        ImGui.Separator();
+
+        // ── Model Configuration ──
+        ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f), "Model Configuration");
+
+        int modelIdx = tm.ModelSizeIndex;
+        if (ImGui.Combo("Model Size", ref modelIdx, "YOLOv8n (Nano)\0YOLOv8s (Small)\0YOLOv8m (Medium)\0YOLOv8l (Large)\0YOLOv8x (XLarge)\0"))
+            tm.ModelSizeIndex = modelIdx;
+
+        int taskIdx = tm.TaskIndex;
+        if (ImGui.Combo("Task", ref taskIdx, "Detect\0Segment\0Pose\0"))
+            tm.TaskIndex = taskIdx;
+
+        int deviceIdx = tm.DeviceIndex;
+        if (ImGui.Combo("Device", ref deviceIdx, "GPU (0)\0CPU\0"))
+            tm.DeviceIndex = deviceIdx;
+
+        ImGui.Separator();
+
+        // ── Hyperparameters ──
+        ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f), "Hyperparameters");
+
+        int epochs = tm.Epochs;
+        if (ImGui.SliderInt("Epochs", ref epochs, 1, 500))
+            tm.Epochs = epochs;
+
+        int batch = tm.BatchSize;
+        if (ImGui.SliderInt("Batch Size", ref batch, 1, 128))
+            tm.BatchSize = batch;
+
+        int imgSize = tm.ImgSize;
+        if (ImGui.SliderInt("Image Size", ref imgSize, 320, 1280))
+            tm.ImgSize = imgSize;
+
+        float lr = tm.LearningRate;
+        if (ImGui.SliderFloat("Learning Rate", ref lr, 0.0001f, 0.1f, "%.6f", ImGuiSliderFlags.Logarithmic))
+            tm.LearningRate = lr;
+
+        int patience = tm.Patience;
+        if (ImGui.SliderInt("Patience", ref patience, 0, 100))
+            tm.Patience = patience;
+
+        int workers = tm.Workers;
+        if (ImGui.SliderInt("Workers", ref workers, 0, 16))
+            tm.Workers = workers;
+
+        ImGui.Separator();
+
+        // ── Dataset Settings ──
+        ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f), "Dataset");
+
+        float split = tm.TrainValSplit;
+        if (ImGui.SliderFloat("Train/Val Split", ref split, 0.5f, 0.95f, "%.2f"))
+            tm.TrainValSplit = split;
+
+        bool resume = tm.ResumeTraining;
+        if (ImGui.Checkbox("Resume from last.pt", ref resume))
+            tm.ResumeTraining = resume;
+
+        ImGui.Separator();
+
+        // ── Action Buttons ──
+        if (!tm.IsTraining)
+        {
+            if (ImGui.Button("🚀 Start Training", new Vector2(-1, 35)))
+            {
+                string datasetDir = Path.GetFullPath(_app.CaptureManager.OutputDirectory);
+                tm.StartTraining(datasetDir);
+            }
+        }
+        else
+        {
+            if (ImGui.Button("⏹ Stop Training", new Vector2(-1, 35)))
+            {
+                tm.StopTraining();
+            }
+        }
+
+        // ── Results ──
+        if (tm.Status == Training.TrainingManager.TrainStatus.Complete && !string.IsNullOrEmpty(tm.BestWeightsPath))
+        {
+            ImGui.Separator();
+            ImGui.TextColored(new Vector4(0.3f, 1f, 0.5f, 1f), "✅ Training Complete!");
+            ImGui.TextWrapped($"Weights: {tm.BestWeightsPath}");
+            if (ImGui.Button("Open Results Folder"))
+            {
+                string? dir = Path.GetDirectoryName(tm.BestWeightsPath);
+                if (dir != null && Directory.Exists(dir))
+                    System.Diagnostics.Process.Start("explorer.exe", dir);
+            }
         }
 
         ImGui.End();

@@ -25,6 +25,10 @@ public class CaptureManager
     public int CompletedFrames { get; private set; }
     public float Progress => TotalFrames > 0 ? (float)CompletedFrames / TotalFrames : 0;
 
+    /// <summary>Set to true for one frame when generation completes. UI reads and clears it.</summary>
+    public bool GenerationJustCompleted { get; set; }
+    public int LastImageCount { get; private set; }
+
     public string OutputDirectory { get; set; } = "output";
     public Annotation.AnnotationMode Mode { get; set; } = Annotation.AnnotationMode.BoundingBox;
     public bool ExportYOLO { get; set; } = true;
@@ -118,6 +122,8 @@ public class CaptureManager
             FinalizeGeneration();
             _renderer.ShowSceneUI = true;
             IsGenerating = false;
+            LastImageCount = _totalCapturedImages;
+            GenerationJustCompleted = true;
             OnLog?.Invoke($"[Capture] Generation complete! {TotalFrames} iterations, {_totalCapturedImages} images saved.");
             return;
         }
