@@ -251,13 +251,15 @@ public class Application
             var skeleton = mr.Mesh.Skeleton;
             if (!skeleton.BonesByName.TryGetValue(kp.BoundBoneName, out var bone)) continue;
 
-            int boneIdx = bone.ID;
-            var finalMatrices = skeleton.GetFinalMatrices();
-            if (boneIdx < 0 || boneIdx >= finalMatrices.Length) continue;
-
+            // Use bone.GlobalTransform (animated joint position), NOT GetFinalMatrices()
+            // GetFinalMatrices includes the bind-pose Offset which is for vertex skinning, not joint positions.
+            // bone.GlobalTransform = the bone's animated transform in skeleton root space.
+            // Multiply by GlobalInverseTransform to account for the root node's transform,
+            // then by the object's world matrix to get the final world position.
+            var boneInModel = bone.GlobalTransform * skeleton.GlobalInverseTransform;
             var objectWorldMatrix = skinnedObj.GetWorldMatrix();
-            var jointModel = finalMatrices[boneIdx] * objectWorldMatrix;
-            var worldPos = jointModel.Translation + kp.BoneOffset;
+            var jointWorld = boneInModel * objectWorldMatrix;
+            var worldPos = jointWorld.Translation + kp.BoneOffset;
 
             obj.Transform.Position = worldPos;
         }
