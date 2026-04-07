@@ -97,13 +97,13 @@ public class TrainingManager
                          (ResumeTraining ? "resume=True " : "") +
                          $"verbose=True";
 
-            OnLog?.Invoke($"[Training] 🚀 Launching: python -m {args}");
+            OnLog?.Invoke($"[Training] 🚀 Launching: {args}");
 
             // 3. Launch the process
             var psi = new ProcessStartInfo
             {
-                FileName = "python",
-                Arguments = $"-m {args}",
+                FileName = "cmd.exe",
+                Arguments = $"/c {args}",
                 WorkingDirectory = Path.GetFullPath(datasetDir),
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
