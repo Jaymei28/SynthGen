@@ -1372,9 +1372,12 @@ public class UIManager
             if (anim.IsPlaying != wasPlaying || anim.Loop != wasLoop)
                 SyncAnimationState(animObj, anim);
             
-            float duration = animMr.Mesh.Clips[current].Duration / animMr.Mesh.Clips[current].TicksPerSecond;
-            float time = anim.PlaybackTime;
-            ImGui.ProgressBar(time / Math.Max(duration, 0.001f), new Vector2(-1, 0), $"{time:F2}s / {duration:F2}s");
+            if (animMr != null && animMr.Mesh != null && animMr.Mesh.Clips.Count > current)
+            {
+                float duration = animMr.Mesh.Clips[current].Duration / animMr.Mesh.Clips[current].TicksPerSecond;
+                float time = anim.PlaybackTime;
+                ImGui.ProgressBar(time / Math.Max(duration, 0.001f), new Vector2(-1, 0), $"{time:F2}s / {duration:F2}s");
+            }
             
             if (ImGui.SliderFloat("Time", ref anim.PlaybackTime, 0, anim.ClipDurationSeconds))
             {
@@ -1424,105 +1427,81 @@ public class UIManager
             AddLog($"[Scene] Applied group '{sel.BodyPartGroup}' to all children of '{sel.Name}'");
         }
 
+
+
         // ── Randomization ──
         ImGui.Separator();
+        ImGui.TextColored(new Vector4(0.3f, 0.7f, 1f, 1), "[ Individual Randomizers ]");
+        
         bool exclude = sel.ExcludeFromRandomization;
-        if (ImGui.Checkbox("Exclude from Randomization", ref exclude))
-        {
+        if (ImGui.Checkbox("EXCLUDE Entire Object (Ignore ALL)", ref exclude))
             sel.ExcludeFromRandomization = exclude;
-        }
-        ImGui.SameLine();
-        HelpMarker("When enabled, position/rotation/scale/texture randomizers will skip this object and all its children.");
 
-        // ── Custom Randomizer Overrides ──
-        var posRand = sel.GetComponent<PositionRandomizerComponent>();
-        if (posRand != null)
+        if (!exclude)
         {
-            if (ImGui.CollapsingHeader("Position Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            // --- Position ---
+            bool hasPos = sel.HasComponent<PositionRandomizerComponent>();
+            if (ImGui.Checkbox("Position Randomization", ref hasPos))
             {
-                ImGui.Checkbox("Enabled##pos_rand", ref posRand.Enabled);
-                ImGui.DragFloat3("Min Bounds##pos_rand", ref posRand.MinBounds, 0.1f);
-                ImGui.DragFloat3("Max Bounds##pos_rand", ref posRand.MaxBounds, 0.1f);
-                if (ImGui.Button("Remove Position Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<PositionRandomizerComponent>();
+                if (hasPos) sel.AddComponent(new PositionRandomizerComponent());
+                else sel.RemoveComponent<PositionRandomizerComponent>();
             }
-        }
-        else
-        {
-            if (ImGui.Button("Add Position Randomizer", new Vector2(-1, 0))) sel.AddComponent(new PositionRandomizerComponent());
-        }
+            var pComp = sel.GetComponent<PositionRandomizerComponent>();
+            if (pComp != null)
+            {
+                ImGui.Columns(2, "pos_cols", false);
+                ImGui.DragFloat3("Min##p", ref pComp.MinBounds, 0.1f); ImGui.NextColumn();
+                ImGui.DragFloat3("Max##p", ref pComp.MaxBounds, 0.1f); ImGui.Columns(1);
+            }
 
-        var rotRand = sel.GetComponent<RotationRandomizerComponent>();
-        if (rotRand != null)
-        {
-            if (ImGui.CollapsingHeader("Rotation Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            // --- Rotation ---
+            bool hasRot = sel.HasComponent<RotationRandomizerComponent>();
+            if (ImGui.Checkbox("Rotation Randomization", ref hasRot))
             {
-                ImGui.Checkbox("Enabled##rot_rand", ref rotRand.Enabled);
-                ImGui.DragFloat3("Min Angles##rot_rand", ref rotRand.MinAngles, 1f);
-                ImGui.DragFloat3("Max Angles##rot_rand", ref rotRand.MaxAngles, 1f);
-                if (ImGui.Button("Remove Rotation Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<RotationRandomizerComponent>();
+                if (hasRot) sel.AddComponent(new RotationRandomizerComponent());
+                else sel.RemoveComponent<RotationRandomizerComponent>();
             }
-        }
-        else
-        {
-            if (ImGui.Button("Add Rotation Randomizer", new Vector2(-1, 0))) sel.AddComponent(new RotationRandomizerComponent());
-        }
+            var rComp = sel.GetComponent<RotationRandomizerComponent>();
+            if (rComp != null)
+            {
+                ImGui.Columns(2, "rot_cols", false);
+                ImGui.DragFloat3("Min Angles##r", ref rComp.MinAngles, 1f); ImGui.NextColumn();
+                ImGui.DragFloat3("Max Angles##r", ref rComp.MaxAngles, 1f); ImGui.Columns(1);
+            }
 
-        var sclRand = sel.GetComponent<ScaleRandomizerComponent>();
-        if (sclRand != null)
-        {
-            if (ImGui.CollapsingHeader("Scale Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            // --- Scale ---
+            bool hasScl = sel.HasComponent<ScaleRandomizerComponent>();
+            if (ImGui.Checkbox("Scale Randomization", ref hasScl))
             {
-                ImGui.Checkbox("Enabled##scl_rand", ref sclRand.Enabled);
-                ImGui.DragFloat("Min Scale##scl_rand", ref sclRand.MinScale, 0.05f, 0.01f, 10f);
-                ImGui.DragFloat("Max Scale##scl_rand", ref sclRand.MaxScale, 0.05f, 0.01f, 10f);
-                ImGui.Checkbox("Uniform Scale##scl_rand", ref sclRand.UniformScale);
-                if (ImGui.Button("Remove Scale Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<ScaleRandomizerComponent>();
+                if (hasScl) sel.AddComponent(new ScaleRandomizerComponent());
+                else sel.RemoveComponent<ScaleRandomizerComponent>();
             }
-        }
-        else
-        {
-            if (ImGui.Button("Add Scale Randomizer", new Vector2(-1, 0))) sel.AddComponent(new ScaleRandomizerComponent());
-        }
+            var sComp = sel.GetComponent<ScaleRandomizerComponent>();
+            if (sComp != null)
+            {
+                ImGui.DragFloat("Min Scale##s", ref sComp.MinScale, 0.05f);
+                ImGui.DragFloat("Max Scale##s", ref sComp.MaxScale, 0.05f);
+                ImGui.Checkbox("Uniform Scale", ref sComp.UniformScale);
+            }
 
-        var depthRand = sel.GetComponent<DepthScaleComponent>();
-        if (depthRand != null)
-        {
-            if (ImGui.CollapsingHeader("Depth Scale (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            // --- Texture ---
+            bool hasTex = sel.HasComponent<TextureRandomizerComponent>();
+            if (ImGui.Checkbox("Texture Randomization", ref hasTex))
             {
-                ImGui.Checkbox("Enabled##depth_rand", ref depthRand.Enabled);
-                ImGui.DragFloat("Near Scale##depth_rand", ref depthRand.NearScale, 0.05f, 0.1f, 5f);
-                ImGui.DragFloat("Far Scale##depth_rand", ref depthRand.FarScale, 0.05f, 0.1f, 5f);
-                ImGui.DragFloat("Reference Dist##depth_rand", ref depthRand.ReferenceDistance, 0.5f, 1f, 100f);
-                if (ImGui.Button("Remove Depth Scale", new Vector2(-1, 0))) sel.RemoveComponent<DepthScaleComponent>();
+                if (hasTex) sel.AddComponent(new TextureRandomizerComponent());
+                else sel.RemoveComponent<TextureRandomizerComponent>();
             }
-        }
-        else
-        {
-            if (ImGui.Button("Add Depth Scale Randomizer", new Vector2(-1, 0))) sel.AddComponent(new DepthScaleComponent());
-        }
-
-        var texRand = sel.GetComponent<TextureRandomizerComponent>();
-        if (texRand != null)
-        {
-            if (ImGui.CollapsingHeader("Texture Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
-            {
-                ImGui.Checkbox("Enabled##tex_rand", ref texRand.Enabled);
-                if (ImGui.Button("Remove Texture Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<TextureRandomizerComponent>();
-            }
-        }
-        else
-        {
-            if (ImGui.Button("Add Texture Randomizer", new Vector2(-1, 0))) sel.AddComponent(new TextureRandomizerComponent());
         }
 
         ImGui.Separator();
-        if (ImGui.Button("Add Buoyancy") && buoy == null)
+        if (sel.GetComponent<Scene.Components.BuoyantBodyComponent>() == null)
         {
-            sel.AddComponent(new BuoyantBodyComponent());
+            if (ImGui.Button("Add Buoyancy", new Vector2(-1, 0)))
+                sel.AddComponent(new Scene.Components.BuoyantBodyComponent());
         }
 
         ImGui.Separator();
-        if (ImGui.Button("🗑 Delete Object"))
+        if (ImGui.Button("🗑 Delete Object", new Vector2(-1, 0)))
         {
             _app.Scene.RemoveObject(sel);
         }
@@ -1545,28 +1524,84 @@ public class UIManager
                 lastCategory = r.Category;
             }
 
-            bool enabled = r.Enabled;
-            if (ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref enabled))
-            {
-                r.Enabled = enabled;
-                r.OnToggle(_app.Scene, enabled);
-            }
+            var sel_obj = _app.Scene.SelectedObject;
 
-            if (r.Enabled)
+            if (r.Category == "Object")
             {
-                ImGui.SameLine();
-                if (ImGui.TreeNode($"[*]##{r.GetHashCode()}"))
+                bool active = false;
+                if (sel_obj != null)
                 {
-                    ImGui.Indent(10);
-                    r.DrawConfigUI(_app.Scene);
-                    ImGui.Unindent(10);
-                    ImGui.TreePop();
+                    if (r.Name == "Position") active = sel_obj.HasComponent<PositionRandomizerComponent>();
+                    else if (r.Name == "Rotation") active = sel_obj.HasComponent<RotationRandomizerComponent>();
+                    else if (r.Name == "Scale") active = sel_obj.HasComponent<ScaleRandomizerComponent>();
+                    else if (r.Name == "Texture") active = sel_obj.HasComponent<TextureRandomizerComponent>();
+                    else if (r.Name == "Depth Scale") active = sel_obj.HasComponent<DepthScaleComponent>();
                 }
 
-                if (r is HDRIRandomizer hr && hr.NeedsRefresh)
+                ImGui.BeginDisabled(sel_obj == null);
+                if (ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref active) && sel_obj != null)
                 {
-                    ImportHdriWithDialog();
-                    hr.NeedsRefresh = false;
+                    if (active) 
+                    {
+                        if (r.Name == "Position") sel_obj.AddComponent(new PositionRandomizerComponent());
+                        else if (r.Name == "Rotation") sel_obj.AddComponent(new RotationRandomizerComponent());
+                        else if (r.Name == "Scale") sel_obj.AddComponent(new ScaleRandomizerComponent());
+                        else if (r.Name == "Texture") sel_obj.AddComponent(new TextureRandomizerComponent());
+                        else if (r.Name == "Depth Scale") sel_obj.AddComponent(new DepthScaleComponent());
+                    }
+                    else
+                    {
+                        if (r.Name == "Position") sel_obj.RemoveComponent<PositionRandomizerComponent>();
+                        else if (r.Name == "Rotation") sel_obj.RemoveComponent<RotationRandomizerComponent>();
+                        else if (r.Name == "Scale") sel_obj.RemoveComponent<ScaleRandomizerComponent>();
+                        else if (r.Name == "Texture") sel_obj.RemoveComponent<TextureRandomizerComponent>();
+                        else if (r.Name == "Depth Scale") sel_obj.RemoveComponent<DepthScaleComponent>();
+                    }
+                }
+                ImGui.EndDisabled();
+
+                if (sel_obj == null)
+                {
+                    ImGui.SameLine();
+                    ImGui.TextDisabled("(No Selection)");
+                }
+                else if (active)
+                {
+                    ImGui.SameLine();
+                    if (ImGui.TreeNode($"[*]##{r.GetHashCode()}"))
+                    {
+                        ImGui.Indent(10);
+                        r.DrawConfigUI(_app.Scene);
+                        ImGui.Unindent(10);
+                        ImGui.TreePop();
+                    }
+                }
+            }
+            else 
+            {
+                bool enabled = r.Enabled;
+                if (ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref enabled))
+                {
+                    r.Enabled = enabled;
+                    r.OnToggle(_app.Scene, enabled);
+                }
+
+                if (r.Enabled)
+                {
+                    ImGui.SameLine();
+                    if (ImGui.TreeNode($"[*]##{r.GetHashCode()}"))
+                    {
+                        ImGui.Indent(10);
+                        r.DrawConfigUI(_app.Scene);
+                        ImGui.Unindent(10);
+                        ImGui.TreePop();
+                    }
+
+                    if (r is HDRIRandomizer hr && hr.NeedsRefresh)
+                    {
+                        ImportHdriWithDialog();
+                        hr.NeedsRefresh = false;
+                    }
                 }
             }
         }

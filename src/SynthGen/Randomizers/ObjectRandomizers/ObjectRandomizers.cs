@@ -61,14 +61,13 @@ public class PositionRandomizer : RandomizerBase
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
             
             var comp = obj.GetComponent<PositionRandomizerComponent>();
-            if (comp != null && comp.Enabled)
-            {
-                obj.Transform.Position = new Vector3(
-                    RandRange(rng, comp.MinBounds.X, comp.MaxBounds.X),
-                    RandRange(rng, comp.MinBounds.Y, comp.MaxBounds.Y),
-                    RandRange(rng, comp.MinBounds.Z, comp.MaxBounds.Z)
-                );
-            }
+            if (comp == null || !comp.Enabled) continue;
+
+            obj.Transform.Position = new Vector3(
+                RandRange(rng, comp.MinBounds.X, comp.MaxBounds.X),
+                RandRange(rng, comp.MinBounds.Y, comp.MaxBounds.Y),
+                RandRange(rng, comp.MinBounds.Z, comp.MaxBounds.Z)
+            );
         }
     }
 
@@ -98,14 +97,13 @@ public class RotationRandomizer : RandomizerBase
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
             
             var comp = obj.GetComponent<RotationRandomizerComponent>();
-            if (comp != null && comp.Enabled)
-            {
-                obj.Transform.Rotation = new Vector3(
-                    RandRange(rng, comp.MinAngles.X, comp.MaxAngles.X),
-                    RandRange(rng, comp.MinAngles.Y, comp.MaxAngles.Y),
-                    RandRange(rng, comp.MinAngles.Z, comp.MaxAngles.Z)
-                );
-            }
+            if (comp == null || !comp.Enabled) continue;
+
+            obj.Transform.Rotation = new Vector3(
+                RandRange(rng, comp.MinAngles.X, comp.MaxAngles.X),
+                RandRange(rng, comp.MinAngles.Y, comp.MaxAngles.Y),
+                RandRange(rng, comp.MinAngles.Z, comp.MaxAngles.Z)
+            );
         }
     }
 
@@ -136,21 +134,20 @@ public class ScaleRandomizer : RandomizerBase
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
 
             var comp = obj.GetComponent<ScaleRandomizerComponent>();
-            if (comp != null && comp.Enabled)
+            if (comp == null || !comp.Enabled) continue;
+
+            if (comp.UniformScale)
             {
-                if (comp.UniformScale)
-                {
-                    float s = RandRange(rng, comp.MinScale, comp.MaxScale);
-                    obj.Transform.Scale = new Vector3(s, s, s);
-                }
-                else
-                {
-                    obj.Transform.Scale = new Vector3(
-                        RandRange(rng, comp.MinScale, comp.MaxScale),
-                        RandRange(rng, comp.MinScale, comp.MaxScale),
-                        RandRange(rng, comp.MinScale, comp.MaxScale)
-                    );
-                }
+                float s = RandRange(rng, comp.MinScale, comp.MaxScale);
+                obj.Transform.Scale = new Vector3(s, s, s);
+            }
+            else
+            {
+                obj.Transform.Scale = new Vector3(
+                    RandRange(rng, comp.MinScale, comp.MaxScale),
+                    RandRange(rng, comp.MinScale, comp.MaxScale),
+                    RandRange(rng, comp.MinScale, comp.MaxScale)
+                );
             }
         }
     }
@@ -228,17 +225,16 @@ public class DepthScaleMapper : RandomizerBase
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
 
             var comp = obj.GetComponent<DepthScaleComponent>();
-            if (comp != null && comp.Enabled)
-            {
-                float nearS = comp.NearScale;
-                float farS = comp.FarScale;
-                float refDist = comp.ReferenceDistance;
+            if (comp == null || !comp.Enabled) continue;
 
-                float dist = Vector3.Distance(cam.Transform.Position, obj.Transform.Position);
-                float t = MathF.Min(dist / refDist, 1f);
-                float scale = MathF.Max(0.1f, nearS + (farS - nearS) * t);
-                obj.Transform.Scale = new Vector3(scale, scale, scale);
-            }
+            float nearS = comp.NearScale;
+            float farS = comp.FarScale;
+            float refDist = comp.ReferenceDistance;
+
+            float dist = Vector3.Distance(cam.Transform.Position, obj.Transform.Position);
+            float t = MathF.Min(dist / refDist, 1f);
+            float scale = MathF.Max(0.1f, nearS + (farS - nearS) * t);
+            obj.Transform.Scale = new Vector3(scale, scale, scale);
         }
     }
 
