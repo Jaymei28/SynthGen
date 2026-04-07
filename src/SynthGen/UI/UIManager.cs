@@ -740,14 +740,14 @@ public class UIManager
             Vector3 camUp = Vector3.Normalize(Vector3.Cross(camRight, camFront));
 
             float dist = cam != null ? cam.OrbitDistance : 10f;
-            float moveSense = dist * 0.001f;
+            float moveSense = dist * 0.003f;
 
             if (_manipMode == ManipulationMode.Move)
             {
                 Vector3 move = (camRight * mouseDelta.X - camUp * mouseDelta.Y) * moveSense;
                 if (_axisLock == 'X') move = new Vector3(mouseDelta.X * moveSense, 0, 0);
                 if (_axisLock == 'Y') move = new Vector3(0, -mouseDelta.Y * moveSense, 0);
-                if (_axisLock == 'Z') move = new Vector3(0, 0, mouseDelta.Y * moveSense);
+                if (_axisLock == 'Z') move = new Vector3(0, 0, -mouseDelta.Y * moveSense);
                 sel.Transform.Position = _initialTransformValue + move;
             }
             else if (_manipMode == ManipulationMode.Rotate)
@@ -1530,8 +1530,33 @@ public class UIManager
         ImGui.Separator();
         ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), "🦴 YOLO26 Pose Keypoints");
 
-        // Check if this object already has keypoint children
-        int kpCount = CountKeypointChildren(sel);
+        // Always resolve to root parent for keypoint checking
+        var kpRoot = sel;
+        while (kpRoot.Parent != null) kpRoot = kpRoot.Parent;
+        int kpCount = CountKeypointChildren(kpRoot);
+
+        // If the selected object IS a keypoint node, show its info + back button
+        var selKp = sel.GetComponent<KeypointComponent>();
+        if (selKp != null)
+        {
+            ImGui.TextColored(new Vector4(1f, 1f, 0.3f, 1), $"🎯 Editing: [{selKp.KeypointIndex}] {selKp.KeypointName}");
+            if (!string.IsNullOrEmpty(selKp.BoundBoneName))
+            {
+                ImGui.TextColored(new Vector4(0.5f, 1f, 0.8f, 1), $"🔗 Bound to bone: {selKp.BoundBoneName}");
+                ImGui.TextWrapped("This keypoint follows the skeleton animation automatically.");
+            }
+            else
+            {
+                ImGui.TextColored(new Vector4(1f, 0.5f, 0.3f, 1), "⚠ No bone binding — static position");
+                ImGui.TextWrapped("Drag Position values above to manually place this keypoint.");
+            }
+            if (ImGui.Button("⬆ Back to Parent", new Vector2(-1, 0)))
+            {
+                _app.Scene.SelectedObject = kpRoot;
+            }
+            ImGui.Spacing();
+        }
+
         ImGui.Text($"Keypoints: {kpCount}/17");
 
         if (kpCount == 0)
@@ -1549,12 +1574,16 @@ public class UIManager
             var kpNames = Annotation.KeypointRegistry.KeypointNames;
             for (int i = 0; i < 17; i++)
             {
-                var kpNode = FindKeypointChild(sel, i);
+                var kpNode = FindKeypointChild(kpRoot, i);
                 if (kpNode != null)
                 {
-                    ImGui.TextColored(new Vector4(0.3f, 1f, 0.5f, 1), "✅");
+                    bool isCurrentlySelected = (kpNode == sel);
+                    if (isCurrentlySelected)
+                        ImGui.TextColored(new Vector4(1f, 1f, 0.3f, 1), "▶");
+                    else
+                        ImGui.TextColored(new Vector4(0.3f, 1f, 0.5f, 1), "✅");
                     ImGui.SameLine();
-                    if (ImGui.Selectable($"[{i}] {kpNames[i]}##kp{i}"))
+                    if (ImGui.Selectable($"[{i}] {kpNames[i]}##kp{i}", isCurrentlySelected))
                     {
                         _app.Scene.SelectedObject = kpNode;
                     }
@@ -1569,18 +1598,9 @@ public class UIManager
 
             if (ImGui.Button("🗑 Remove All Keypoints", new Vector2(-1, 0)))
             {
-                RemoveKeypointsFromObject(sel);
-                AddLog($"[Pose] Removed all keypoint nodes from {sel.Name}");
+                RemoveKeypointsFromObject(kpRoot);
+                AddLog($"[Pose] Removed all keypoint nodes from {kpRoot.Name}");
             }
-        }
-
-        // If the selected object IS a keypoint node, show its info
-        var selKp = sel.GetComponent<KeypointComponent>();
-        if (selKp != null)
-        {
-            ImGui.Separator();
-            ImGui.TextColored(new Vector4(1f, 1f, 0.3f, 1), $"🎯 Keypoint: [{selKp.KeypointIndex}] {selKp.KeypointName}");
-            ImGui.TextWrapped("Move this node's Transform to position the keypoint on the model.");
         }
 
         // ── Randomization ──
@@ -2495,7 +2515,7 @@ public class UIManager
 
     /// <summary>
     /// Creates 17 empty child nodes under the given object, each tagged with a KeypointComponent.
-    /// Positions them in a rough T-pose layout based on the model's bounding box.
+    /// Auto-binds to skeleton bones if the model has a skeleton.
     /// </summary>
     private void SetupKeypointsForObject(SceneObject parent)
     {
@@ -2510,8 +2530,16 @@ public class UIManager
             if (h < 0.1f) h = 1.8f;
         }
 
+        // Try to auto-map bones for binding
+        Dictionary<int, string>? boneMapping = null;
+        if (mr?.Mesh?.Skeleton != null)
+        {
+            boneMapping = Annotation.KeypointRegistry.AutoMapBones(mr.Mesh.Skeleton.BonesByName.Keys);
+            if (boneMapping.Count > 0)
+                AddLog($"[Pose] Auto-bound {boneMapping.Count}/17 keypoints to skeleton bones");
+        }
+
         // Rough T-pose offsets (X=left/right, Y=up, Z=forward) relative to parent center
-        // Normalized to a model of height 'h'
         var offsets = new Vector3[]
         {
             new(0, h * 0.95f, 0.02f),       // 0: Nose
@@ -2535,9 +2563,17 @@ public class UIManager
 
         for (int i = 0; i < 17; i++)
         {
+            var kpComp = new KeypointComponent(i, kpNames[i]);
+
+            // Auto-bind to skeleton bone if available
+            if (boneMapping != null && boneMapping.TryGetValue(i, out var boneName))
+            {
+                kpComp.BoundBoneName = boneName;
+            }
+
             var node = new SceneObject($"KP_{i}_{kpNames[i].Replace(" ", "")}");
             node.Transform.Position = parent.Transform.Position + offsets[i];
-            node.AddComponent(new KeypointComponent(i, kpNames[i]));
+            node.AddComponent(kpComp);
             parent.AddChild(node);
             _app.Scene.AddObject(node);
         }

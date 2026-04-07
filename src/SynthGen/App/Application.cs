@@ -175,6 +175,9 @@ public class Application
             var anim = obj.GetComponent<AnimationPlayerComponent>();
             if (anim != null) anim.Update(_deltaTime);
         }
+
+        // Update bone-bound keypoints to follow skeleton animation
+        UpdateBoneKeypointPositions();
     }
 
     private void OnRender(double dt)
@@ -225,5 +228,51 @@ public class Application
         _input?.Dispose();
         _gl?.Dispose();
         Console.WriteLine("[SynthGen] Shutdown complete.");
+    }
+
+    /// <summary>
+    /// Updates all bone-bound keypoint nodes to follow their skeleton bones each frame.
+    /// </summary>
+    private void UpdateBoneKeypointPositions()
+    {
+        foreach (var obj in _scene.Objects)
+        {
+            var kp = obj.GetComponent<KeypointComponent>();
+            if (kp == null || string.IsNullOrEmpty(kp.BoundBoneName)) continue;
+
+            // Walk up to find the root parent
+            var root = obj;
+            while (root.Parent != null) root = root.Parent;
+
+            // Find the first skinned mesh in the hierarchy
+            var (skinnedObj, mr) = FindFirstSkinnedMeshInHierarchy(root);
+            if (skinnedObj == null || mr?.Mesh?.Skeleton == null) continue;
+
+            var skeleton = mr.Mesh.Skeleton;
+            if (!skeleton.BonesByName.TryGetValue(kp.BoundBoneName, out var bone)) continue;
+
+            int boneIdx = bone.ID;
+            var finalMatrices = skeleton.GetFinalMatrices();
+            if (boneIdx < 0 || boneIdx >= finalMatrices.Length) continue;
+
+            var objectWorldMatrix = skinnedObj.GetWorldMatrix();
+            var jointModel = finalMatrices[boneIdx] * objectWorldMatrix;
+            var worldPos = jointModel.Translation + kp.BoneOffset;
+
+            obj.Transform.Position = worldPos;
+        }
+    }
+
+    private static (Scene.SceneObject?, MeshRendererComponent?) FindFirstSkinnedMeshInHierarchy(Scene.SceneObject obj)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr?.Mesh != null && mr.Mesh.HasSkinning && mr.Mesh.Skeleton != null)
+            return (obj, mr);
+        foreach (var child in obj.Children)
+        {
+            var result = FindFirstSkinnedMeshInHierarchy(child);
+            if (result.Item1 != null) return result;
+        }
+        return (null, null);
     }
 }
