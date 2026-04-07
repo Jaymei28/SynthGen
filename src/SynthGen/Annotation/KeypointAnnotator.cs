@@ -56,22 +56,91 @@ public static class KeypointAnnotator
         Dictionary<int, string>? keypointBoneMap = null)
     {
         var results = new List<KeypointAnnotation>();
-        var processedSkeletons = new HashSet<Skeleton>();
         var vp = viewMatrix * projMatrix;
 
         foreach (var rootObj in scene.Objects)
         {
             if (rootObj.Parent != null) continue;
 
-            // Find the first skinned mesh in this hierarchy
+            // ── Path 1: Node-based keypoints (KeypointComponent nodes) ──
+            var nodeKeypoints = CollectKeypointNodes(rootObj);
+            if (nodeKeypoints.Count > 0)
+            {
+                var annotation = new KeypointAnnotation();
+                var label = FindLabel(rootObj);
+                if (label != null)
+                {
+                    annotation.ClassID = label.ClassID;
+                    annotation.InstanceID = label.InstanceID;
+                    annotation.ClassName = label.ClassName;
+                }
+
+                int visibleCount = 0;
+                float minX = float.MaxValue, minY = float.MaxValue;
+                float maxX = float.MinValue, maxY = float.MinValue;
+
+                for (int kp = 0; kp < 17; kp++)
+                {
+                    if (!nodeKeypoints.TryGetValue(kp, out var kpNode))
+                    {
+                        annotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                        continue;
+                    }
+
+                    var worldPos = kpNode.Transform.Position;
+                    var clip = Vector4.Transform(new Vector4(worldPos, 1.0f), vp);
+                    if (clip.W <= 0)
+                    {
+                        annotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                        continue;
+                    }
+
+                    float ndcX = clip.X / clip.W;
+                    float ndcY = clip.Y / clip.W;
+                    float sx = (ndcX + 1) * 0.5f * imageWidth;
+                    float sy = (1 - ndcY) * 0.5f * imageHeight;
+
+                    bool inBounds = sx >= 0 && sx < imageWidth && sy >= 0 && sy < imageHeight;
+                    annotation.Keypoints[kp] = new Keypoint2D
+                    {
+                        X = sx,
+                        Y = sy,
+                        V = inBounds ? 2 : 1
+                    };
+
+                    if (inBounds)
+                    {
+                        visibleCount++;
+                        minX = MathF.Min(minX, sx);
+                        minY = MathF.Min(minY, sy);
+                        maxX = MathF.Max(maxX, sx);
+                        maxY = MathF.Max(maxY, sy);
+                    }
+                }
+
+                annotation.NumKeypoints = visibleCount;
+                if (visibleCount > 0)
+                {
+                    float pad = 20f;
+                    annotation.BBox = new[]
+                    {
+                        MathF.Max(0, minX - pad),
+                        MathF.Max(0, minY - pad),
+                        MathF.Min(imageWidth, maxX + pad) - MathF.Max(0, minX - pad),
+                        MathF.Min(imageHeight, maxY + pad) - MathF.Max(0, minY - pad)
+                    };
+                    results.Add(annotation);
+                }
+                continue; // Skip bone-based path for this object
+            }
+
+            // ── Path 2: Bone-based keypoints (skeleton armature) ──
             var (skinnedObj, mr) = FindFirstSkinnedMesh(rootObj);
             if (skinnedObj == null || mr?.Mesh == null) continue;
 
             var skeleton = mr.Mesh.Skeleton;
             if (skeleton == null) continue;
-            if (!processedSkeletons.Add(skeleton)) continue;
 
-            // Evaluate animation to current pose (same as Renderer does)
             var anim = skinnedObj.GetComponent<AnimationPlayerComponent>();
             if (anim != null && mr.Mesh.Clips.Count > 0)
             {
@@ -79,71 +148,58 @@ public static class KeypointAnnotator
                 mr.Mesh.Clips[clipIdx].Apply(skeleton, anim.PlaybackTime);
             }
 
-            // Get the final bone matrices — EXACT same as Renderer line 297:
-            //   matrices[i] = Bones[i].Offset * Bones[i].GlobalTransform * GlobalInverseTransform
             var finalBoneMatrices = skeleton.GetFinalMatrices();
-
-            // Get the object's world matrix — EXACT same as Renderer line 283:
-            //   var model = obj.GetWorldMatrix();
             var objectWorldMatrix = skinnedObj.GetWorldMatrix();
 
-            // Auto-map bones if no explicit mapping provided
             var mapping = keypointBoneMap ?? KeypointRegistry.AutoMapBones(
                 skeleton.BonesByName.Keys);
 
-            var annotation = new KeypointAnnotation();
-            var label = FindLabel(rootObj);
-            if (label != null)
+            var boneAnnotation = new KeypointAnnotation();
+            var boneLabel = FindLabel(rootObj);
+            if (boneLabel != null)
             {
-                annotation.ClassID = label.ClassID;
-                annotation.InstanceID = label.InstanceID;
-                annotation.ClassName = label.ClassName;
+                boneAnnotation.ClassID = boneLabel.ClassID;
+                boneAnnotation.InstanceID = boneLabel.InstanceID;
+                boneAnnotation.ClassName = boneLabel.ClassName;
             }
 
-            int visibleCount = 0;
-            float minX = float.MaxValue, minY = float.MaxValue;
-            float maxX = float.MinValue, maxY = float.MinValue;
+            int boneVisibleCount = 0;
+            float bMinX = float.MaxValue, bMinY = float.MaxValue;
+            float bMaxX = float.MinValue, bMaxY = float.MinValue;
 
             for (int kp = 0; kp < 17; kp++)
             {
                 if (!mapping.TryGetValue(kp, out var boneName) ||
                     !skeleton.BonesByName.TryGetValue(boneName, out var bone))
                 {
-                    annotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                    boneAnnotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                     continue;
                 }
 
-                // EXACT same math as UIManager.DrawOriented3DBox lines 976-1000:
-                //   model = boneMatrices[boneIdx] * obj.GetWorldMatrix();
-                //   worldP = Vector3.Transform(localPoint, model);
-                // For a joint, the "localPoint" is the bone origin [0,0,0] in mesh space.
-                // Since finalBoneMatrix maps mesh-space → animated-model-space,
-                // Transform(Zero, finalBone * worldMatrix) gives the world position.
                 int boneIdx = bone.ID;
                 if (boneIdx < 0 || boneIdx >= finalBoneMatrices.Length)
                 {
-                    annotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                    boneAnnotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                     continue;
                 }
 
                 var jointModel = finalBoneMatrices[boneIdx] * objectWorldMatrix;
                 var jointWorldPos = jointModel.Translation;
 
-                // Project 3D → 2D (same as UIManager.WorldToScreen)
-                var clip = Vector4.Transform(new Vector4(jointWorldPos, 1.0f), vp);
-                if (clip.W <= 0)
+                var clip2 = Vector4.Transform(new Vector4(jointWorldPos, 1.0f), vp);
+                if (clip2.W <= 0)
                 {
-                    annotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                    boneAnnotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                     continue;
                 }
 
-                float ndcX = clip.X / clip.W;
-                float ndcY = clip.Y / clip.W;
+                float ndcX = clip2.X / clip2.W;
+                float ndcY = clip2.Y / clip2.W;
                 float sx = (ndcX + 1) * 0.5f * imageWidth;
                 float sy = (1 - ndcY) * 0.5f * imageHeight;
 
                 bool inBounds = sx >= 0 && sx < imageWidth && sy >= 0 && sy < imageHeight;
-                annotation.Keypoints[kp] = new Keypoint2D
+                boneAnnotation.Keypoints[kp] = new Keypoint2D
                 {
                     X = sx,
                     Y = sy,
@@ -152,30 +208,53 @@ public static class KeypointAnnotator
 
                 if (inBounds)
                 {
-                    visibleCount++;
-                    minX = MathF.Min(minX, sx);
-                    minY = MathF.Min(minY, sy);
-                    maxX = MathF.Max(maxX, sx);
-                    maxY = MathF.Max(maxY, sy);
+                    boneVisibleCount++;
+                    bMinX = MathF.Min(bMinX, sx);
+                    bMinY = MathF.Min(bMinY, sy);
+                    bMaxX = MathF.Max(bMaxX, sx);
+                    bMaxY = MathF.Max(bMaxY, sy);
                 }
             }
 
-            annotation.NumKeypoints = visibleCount;
-            if (visibleCount > 0)
+            boneAnnotation.NumKeypoints = boneVisibleCount;
+            if (boneVisibleCount > 0)
             {
                 float pad = 20f;
-                annotation.BBox = new[]
+                boneAnnotation.BBox = new[]
                 {
-                    MathF.Max(0, minX - pad),
-                    MathF.Max(0, minY - pad),
-                    MathF.Min(imageWidth, maxX + pad) - MathF.Max(0, minX - pad),
-                    MathF.Min(imageHeight, maxY + pad) - MathF.Max(0, minY - pad)
+                    MathF.Max(0, bMinX - pad),
+                    MathF.Max(0, bMinY - pad),
+                    MathF.Min(imageWidth, bMaxX + pad) - MathF.Max(0, bMinX - pad),
+                    MathF.Min(imageHeight, bMaxY + pad) - MathF.Max(0, bMinY - pad)
                 };
-                results.Add(annotation);
+                results.Add(boneAnnotation);
             }
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Collects all KeypointComponent nodes from a hierarchy into a dictionary by index.
+    /// </summary>
+    private static Dictionary<int, SceneObject> CollectKeypointNodes(SceneObject obj)
+    {
+        var result = new Dictionary<int, SceneObject>();
+        CollectKeypointNodesRecursive(obj, result);
+        return result;
+    }
+
+    private static void CollectKeypointNodesRecursive(SceneObject obj, Dictionary<int, SceneObject> result)
+    {
+        var kp = obj.GetComponent<Scene.Components.KeypointComponent>();
+        if (kp != null && kp.KeypointIndex >= 0 && kp.KeypointIndex < 17)
+        {
+            result[kp.KeypointIndex] = obj;
+        }
+        foreach (var child in obj.Children)
+        {
+            CollectKeypointNodesRecursive(child, result);
+        }
     }
 
     private static (SceneObject?, MeshRendererComponent?) FindFirstSkinnedMesh(SceneObject obj)

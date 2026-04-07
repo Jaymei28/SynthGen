@@ -604,6 +604,18 @@ public class UIManager
             drawList.AddRectFilled(pos + new Vector2(0, 30), pos + new Vector2(size.X + 20, 60), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f)));
             drawList.AddText(pos + new Vector2(10, 35), ImGui.GetColorU32(new Vector4(1, 1, 0, 1)), msg);
         }
+        // ── Keypoint Skeleton Overlay ──
+        var selObj = _app.Scene.SelectedObject;
+        if (selObj != null)
+        {
+            // Check if selected object or its parent root has keypoints
+            var kpRoot = selObj;
+            while (kpRoot.Parent != null) kpRoot = kpRoot.Parent;
+            if (CountKeypointChildren(kpRoot) > 0)
+            {
+                DrawKeypointOverlay(kpRoot);
+            }
+        }
 
         ImGui.End();
     }
@@ -1514,6 +1526,62 @@ public class UIManager
         }
 
 
+        // ── YOLO26 Keypoint Setup ──
+        ImGui.Separator();
+        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), "🦴 YOLO26 Pose Keypoints");
+
+        // Check if this object already has keypoint children
+        int kpCount = CountKeypointChildren(sel);
+        ImGui.Text($"Keypoints: {kpCount}/17");
+
+        if (kpCount == 0)
+        {
+            if (ImGui.Button("🦴 Setup 17 Keypoints", new Vector2(-1, 0)))
+            {
+                SetupKeypointsForObject(sel);
+                AddLog($"[Pose] Created 17 COCO keypoint nodes under {sel.Name}");
+            }
+            ImGui.TextWrapped("Creates 17 empty child nodes positioned in a rough T-pose. Select each node to reposition it on the model.");
+        }
+        else
+        {
+            // Show keypoint status list
+            var kpNames = Annotation.KeypointRegistry.KeypointNames;
+            for (int i = 0; i < 17; i++)
+            {
+                var kpNode = FindKeypointChild(sel, i);
+                if (kpNode != null)
+                {
+                    ImGui.TextColored(new Vector4(0.3f, 1f, 0.5f, 1), "✅");
+                    ImGui.SameLine();
+                    if (ImGui.Selectable($"[{i}] {kpNames[i]}##kp{i}"))
+                    {
+                        _app.Scene.SelectedObject = kpNode;
+                    }
+                }
+                else
+                {
+                    ImGui.TextColored(new Vector4(1f, 0.3f, 0.3f, 1), "❌");
+                    ImGui.SameLine();
+                    ImGui.Text($"[{i}] {kpNames[i]} (MISSING)");
+                }
+            }
+
+            if (ImGui.Button("🗑 Remove All Keypoints", new Vector2(-1, 0)))
+            {
+                RemoveKeypointsFromObject(sel);
+                AddLog($"[Pose] Removed all keypoint nodes from {sel.Name}");
+            }
+        }
+
+        // If the selected object IS a keypoint node, show its info
+        var selKp = sel.GetComponent<KeypointComponent>();
+        if (selKp != null)
+        {
+            ImGui.Separator();
+            ImGui.TextColored(new Vector4(1f, 1f, 0.3f, 1), $"🎯 Keypoint: [{selKp.KeypointIndex}] {selKp.KeypointName}");
+            ImGui.TextWrapped("Move this node's Transform to position the keypoint on the model.");
+        }
 
         // ── Randomization ──
         ImGui.Separator();
@@ -2420,6 +2488,173 @@ public class UIManager
             ImGui.TextUnformatted(desc);
             ImGui.PopTextWrapPos();
             ImGui.EndTooltip();
+        }
+    }
+
+    // ── Keypoint Helpers ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates 17 empty child nodes under the given object, each tagged with a KeypointComponent.
+    /// Positions them in a rough T-pose layout based on the model's bounding box.
+    /// </summary>
+    private void SetupKeypointsForObject(SceneObject parent)
+    {
+        var kpNames = Annotation.KeypointRegistry.KeypointNames;
+
+        // Try to get bounding box from the model for scaling
+        float h = 1.8f; // default human height
+        var mr = FindFirstMeshRenderer(parent);
+        if (mr?.Mesh != null)
+        {
+            h = (mr.Mesh.BoundingBoxMax.Y - mr.Mesh.BoundingBoxMin.Y) * parent.Transform.Scale.Y;
+            if (h < 0.1f) h = 1.8f;
+        }
+
+        // Rough T-pose offsets (X=left/right, Y=up, Z=forward) relative to parent center
+        // Normalized to a model of height 'h'
+        var offsets = new Vector3[]
+        {
+            new(0, h * 0.95f, 0.02f),       // 0: Nose
+            new(0.03f, h * 0.97f, 0.02f),    // 1: Left Eye
+            new(-0.03f, h * 0.97f, 0.02f),   // 2: Right Eye
+            new(0.07f, h * 0.95f, 0f),        // 3: Left Ear
+            new(-0.07f, h * 0.95f, 0f),       // 4: Right Ear
+            new(0.18f, h * 0.82f, 0),         // 5: Left Shoulder
+            new(-0.18f, h * 0.82f, 0),        // 6: Right Shoulder
+            new(0.40f, h * 0.70f, 0),         // 7: Left Elbow
+            new(-0.40f, h * 0.70f, 0),        // 8: Right Elbow
+            new(0.55f, h * 0.60f, 0),         // 9: Left Wrist
+            new(-0.55f, h * 0.60f, 0),        // 10: Right Wrist
+            new(0.10f, h * 0.50f, 0),         // 11: Left Hip
+            new(-0.10f, h * 0.50f, 0),        // 12: Right Hip
+            new(0.10f, h * 0.28f, 0),         // 13: Left Knee
+            new(-0.10f, h * 0.28f, 0),        // 14: Right Knee
+            new(0.10f, h * 0.05f, 0),         // 15: Left Ankle
+            new(-0.10f, h * 0.05f, 0),        // 16: Right Ankle
+        };
+
+        for (int i = 0; i < 17; i++)
+        {
+            var node = new SceneObject($"KP_{i}_{kpNames[i].Replace(" ", "")}");
+            node.Transform.Position = parent.Transform.Position + offsets[i];
+            node.AddComponent(new KeypointComponent(i, kpNames[i]));
+            parent.AddChild(node);
+            _app.Scene.AddObject(node);
+        }
+    }
+
+    private int CountKeypointChildren(SceneObject obj)
+    {
+        int count = 0;
+        foreach (var child in obj.Children)
+        {
+            if (child.GetComponent<KeypointComponent>() != null) count++;
+            count += CountKeypointChildren(child);
+        }
+        return count;
+    }
+
+    private SceneObject? FindKeypointChild(SceneObject obj, int keypointIndex)
+    {
+        foreach (var child in obj.Children)
+        {
+            var kp = child.GetComponent<KeypointComponent>();
+            if (kp != null && kp.KeypointIndex == keypointIndex) return child;
+            var found = FindKeypointChild(child, keypointIndex);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private void RemoveKeypointsFromObject(SceneObject obj)
+    {
+        var toRemove = new List<SceneObject>();
+        CollectKeypointNodes(obj, toRemove);
+        foreach (var node in toRemove)
+        {
+            _app.Scene.RemoveObject(node);
+        }
+    }
+
+    private void CollectKeypointNodes(SceneObject obj, List<SceneObject> list)
+    {
+        foreach (var child in obj.Children.ToList())
+        {
+            if (child.GetComponent<KeypointComponent>() != null)
+                list.Add(child);
+            else
+                CollectKeypointNodes(child, list);
+        }
+    }
+
+    /// <summary>
+    /// Draw COCO skeleton overlay in the viewport for the selected object's keypoints.
+    /// </summary>
+    private void DrawKeypointOverlay(SceneObject root)
+    {
+        var cam = _app.Scene.ActiveCamera;
+        if (cam == null) return;
+
+        var view = cam.GetViewMatrix();
+        float aspect = (float)_app.Renderer.Width / Math.Max(1, _app.Renderer.Height);
+        var proj = cam.GetProjectionMatrix(aspect);
+
+        var kpScreenPos = new Vector2?[17];
+
+        // Project all keypoint world positions to screen
+        for (int i = 0; i < 17; i++)
+        {
+            var kpNode = FindKeypointChild(root, i);
+            if (kpNode == null) continue;
+
+            var worldPos = kpNode.Transform.Position;
+            var clip = Vector4.Transform(new Vector4(worldPos, 1.0f), view * proj);
+            if (clip.W <= 0.001f) continue;
+
+            float ndcX = clip.X / clip.W;
+            float ndcY = clip.Y / clip.W;
+            float sx = (ndcX + 1) * 0.5f * _viewportSize.X;
+            float sy = (1 - ndcY) * 0.5f * _viewportSize.Y;
+
+            if (sx >= -50 && sx < _viewportSize.X + 50 && sy >= -50 && sy < _viewportSize.Y + 50)
+                kpScreenPos[i] = _viewportScreenPos + new Vector2(sx, sy);
+        }
+
+        var drawList = ImGui.GetWindowDrawList();
+
+        // Draw skeleton edges
+        var edges = Annotation.KeypointRegistry.SkeletonEdges;
+        foreach (var (a, b) in edges)
+        {
+            if (kpScreenPos[a].HasValue && kpScreenPos[b].HasValue)
+            {
+                // Color by body region
+                uint lineColor;
+                if (a <= 4 || b <= 4) lineColor = ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 0.8f)); // Face = green
+                else if (a >= 11 || b >= 11) lineColor = ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 0.8f)); // Legs = pink
+                else lineColor = ImGui.GetColorU32(new Vector4(0.3f, 0.7f, 1f, 0.8f)); // Arms/torso = blue
+
+                drawList.AddLine(kpScreenPos[a]!.Value, kpScreenPos[b]!.Value, lineColor, 2f);
+            }
+        }
+
+        // Draw keypoint circles
+        for (int i = 0; i < 17; i++)
+        {
+            if (!kpScreenPos[i].HasValue) continue;
+            var pos = kpScreenPos[i]!.Value;
+            
+            uint circleColor;
+            if (i <= 4) circleColor = ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 1f)); // Face
+            else if (i >= 11) circleColor = ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 1f)); // Legs
+            else circleColor = ImGui.GetColorU32(new Vector4(0.3f, 0.7f, 1f, 1f)); // Arms
+
+            drawList.AddCircleFilled(pos, 5f, circleColor);
+            drawList.AddCircle(pos, 5f, ImGui.GetColorU32(new Vector4(1, 1, 1, 0.8f)), 12, 1.5f);
+            
+            // Label
+            drawList.AddText(pos + new Vector2(8, -6), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.9f)),
+                $"{i}");
         }
     }
 }
