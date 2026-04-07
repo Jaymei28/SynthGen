@@ -232,9 +232,13 @@ public class Application
 
     /// <summary>
     /// Updates all bone-bound keypoint nodes to follow their skeleton bones each frame.
+    /// Must apply the animation clip to the skeleton FIRST to get up-to-date bone transforms.
     /// </summary>
     private void UpdateBoneKeypointPositions()
     {
+        // Group keypoints by root parent for efficiency
+        var rootsProcessed = new HashSet<Scene.SceneObject>();
+
         foreach (var obj in _scene.Objects)
         {
             var kp = obj.GetComponent<KeypointComponent>();
@@ -244,18 +248,29 @@ public class Application
             var root = obj;
             while (root.Parent != null) root = root.Parent;
 
-            // Find the first skinned mesh in the hierarchy
+            // Find the skinned mesh + skeleton
             var (skinnedObj, mr) = FindFirstSkinnedMeshInHierarchy(root);
             if (skinnedObj == null || mr?.Mesh?.Skeleton == null) continue;
 
             var skeleton = mr.Mesh.Skeleton;
+
+            // Apply animation to skeleton ONCE per root (ensures bone transforms are current)
+            if (rootsProcessed.Add(root))
+            {
+                var anim = skinnedObj.GetComponent<AnimationPlayerComponent>();
+                if (anim != null && mr.Mesh.Clips.Count > 0)
+                {
+                    int clipIdx = anim.CurrentClipIndex % mr.Mesh.Clips.Count;
+                    mr.Mesh.Clips[clipIdx].Apply(skeleton, anim.PlaybackTime);
+                }
+            }
+
+            // Now read the bone's updated transform
             if (!skeleton.BonesByName.TryGetValue(kp.BoundBoneName, out var bone)) continue;
 
-            // Use bone.GlobalTransform (animated joint position), NOT GetFinalMatrices()
-            // GetFinalMatrices includes the bind-pose Offset which is for vertex skinning, not joint positions.
-            // bone.GlobalTransform = the bone's animated transform in skeleton root space.
-            // Multiply by GlobalInverseTransform to account for the root node's transform,
-            // then by the object's world matrix to get the final world position.
+            // bone.GlobalTransform = animated joint position in skeleton root space
+            // GlobalInverseTransform = undo root node transform → model space
+            // objectWorldMatrix = model space → world space
             var boneInModel = bone.GlobalTransform * skeleton.GlobalInverseTransform;
             var objectWorldMatrix = skinnedObj.GetWorldMatrix();
             var jointWorld = boneInModel * objectWorldMatrix;
