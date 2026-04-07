@@ -836,7 +836,17 @@ void main() {
     vec2 center = vec2(0.5);
     vec2 dist = vUV - center;
     float d = length(dist);
+    
+    // Apply barrel distortion
     vec2 uv = center + dist * (1.0 + d * d * uStrength);
+    
+    // Scale down by the maximum possible distortion (which occurs at the corners where d^2 = 0.5)
+    // This ensures no sampled UV ever goes outside [0, 1], completely eliminating the black frame.
+    float cornerDistortion = 1.0 + 0.5 * uStrength;
+    uv = center + (uv - center) / cornerDistortion;
+    
+    // Clamp to edge to be absolutely safe
+    uv = clamp(uv, 0.0, 1.0);
     FragOut = texture(uScene, uv);
 }
 ";

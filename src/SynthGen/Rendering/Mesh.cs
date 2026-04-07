@@ -21,6 +21,7 @@ public class Mesh : IDisposable
     public string SourcePath { get; set; } = "";
     public Vector3 BoundingBoxMin { get; set; }
     public Vector3 BoundingBoxMax { get; set; }
+    public int PrimaryBoneIndex { get; private set; } = -1;
     public string? SuggestedTexturePath { get; set; }
     public List<Matrix4x4> BoneOffsets { get; private set; } = new();
     public Skeleton? Skeleton { get; set; }
@@ -82,6 +83,23 @@ public class Mesh : IDisposable
                 _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(weights.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
             _gl.EnableVertexAttribArray(5);
             _gl.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, 4 * sizeof(float), (void*)0);
+            
+            // Calculate primary bone (bone with highest total weight influence across the mesh)
+            float[] totalBoneWeights = new float[256];
+            for (int i = 0; i < weights.Length; i++)
+            {
+                int bone = boneIDs[i];
+                if (bone >= 0 && bone < 256) totalBoneWeights[bone] += weights[i];
+            }
+            float maxWeight = -1f;
+            for (int i = 0; i < 256; i++)
+            {
+                if (totalBoneWeights[i] > maxWeight)
+                {
+                    maxWeight = totalBoneWeights[i];
+                    PrimaryBoneIndex = i;
+                }
+            }
         }
 
         _gl.BindVertexArray(0);

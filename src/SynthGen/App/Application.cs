@@ -83,7 +83,7 @@ public class Application
         _renderer = new Rendering.Renderer(_gl, 1920, 1080);
         _ocean = new Physics.OceanSimulation();
         _buoyancy = new Physics.BuoyancySystem(_ocean);
-        _captureManager = new Capture.CaptureManager(_gl, _renderer, _scene);
+        _captureManager = new Capture.CaptureManager(_gl, _renderer, _scene, _ocean);
         _inputManager = new InputManager(_input);
         _uiManager = new UI.UIManager(this);
 
@@ -153,7 +153,7 @@ public class Application
         _buoyancy.Update(_scene, _deltaTime);
 
         // Update capture pipeline if generating
-        _captureManager.Update(_deltaTime);
+        _captureManager.Update(_deltaTime, _totalTime);
 
         // Update all randomizers
         foreach (var r in _uiManager.AllRandomizers)

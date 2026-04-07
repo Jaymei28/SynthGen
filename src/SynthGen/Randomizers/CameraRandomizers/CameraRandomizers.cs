@@ -1,4 +1,6 @@
 using System.Numerics;
+using System.Linq;
+using System.Collections.Generic;
 using ImGuiNET;
 using SynthGen.Scene;
 
@@ -15,11 +17,27 @@ public class CameraPositionRandomizer : RandomizerBase
     public float MinYaw = -180f, MaxYaw = 180f;
     public float MinPitch = 5f, MaxPitch = 60f;
     public float MinDist = 5f, MaxDist = 25f;
+    public string TargetObjectName { get; set; } = "Scene Center";
 
     public override void Randomize(SceneGraph scene, Random rng)
     {
         var cam = scene.ActiveCamera;
         if (cam == null) return;
+
+        // Apply orbit target before randomizing angles/dist
+        if (TargetObjectName != "Scene Center")
+        {
+            var targetObj = scene.Objects.FirstOrDefault(o => o.Name == TargetObjectName);
+            if (targetObj != null)
+            {
+                cam.OrbitTarget = targetObj.Transform.Position;
+            }
+        }
+        else
+        {
+            cam.OrbitTarget = Vector3.Zero;
+        }
+
         cam.OrbitYaw = RandRange(rng, MinYaw, MaxYaw);
         cam.OrbitPitch = RandRange(rng, MinPitch, MaxPitch);
         cam.OrbitDistance = RandRange(rng, MinDist, MaxDist);
@@ -27,6 +45,26 @@ public class CameraPositionRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
+        // Target Picker
+        var names = new List<string> { "Scene Center" };
+        names.AddRange(scene.Objects.Select(o => o.Name).Where(n => !n.Contains("$AssimpFbx$")));
+        
+        int current = names.IndexOf(TargetObjectName);
+        if (current < 0) current = 0;
+
+        if (ImGui.Combo("Orbit Target", ref current, names.ToArray(), names.Count))
+        {
+            TargetObjectName = names[current];
+            
+            // Preview instantly if not generating
+            var targetObj = scene.Objects.FirstOrDefault(o => o.Name == TargetObjectName);
+            if (scene.ActiveCamera != null)
+            {
+                scene.ActiveCamera.OrbitTarget = (TargetObjectName == "Scene Center" || targetObj == null) 
+                    ? Vector3.Zero : targetObj.Transform.Position;
+            }
+        }
+
         ImGui.DragFloatRange2("Yaw", ref MinYaw, ref MaxYaw, 1f, -180, 180);
         ImGui.DragFloatRange2("Pitch", ref MinPitch, ref MaxPitch, 1f, -89, 89);
         ImGui.DragFloatRange2("Distance", ref MinDist, ref MaxDist, 0.5f, 0.5f, 100);
@@ -53,7 +91,14 @@ public class FisheyeRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Strength", ref MinStrength, ref MaxStrength, 0.05f, 0, 3);
+        if (ImGui.DragFloatRange2("Strength", ref MinStrength, ref MaxStrength, 0.05f, 0, 3))
+            OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null) cam.FisheyeStrength = enabled ? (MinStrength + MaxStrength) * 0.5f : 0f;
     }
 }
 
@@ -79,8 +124,19 @@ public class FogRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Density", ref MinDensity, ref MaxDensity, 0.05f, 0, 5);
-        ImGui.ColorEdit3("Fog Color", ref FogColor);
+        bool changed = ImGui.DragFloatRange2("Density", ref MinDensity, ref MaxDensity, 0.05f, 0, 5);
+        changed |= ImGui.ColorEdit3("Fog Color", ref FogColor);
+        if (changed) OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null)
+        {
+            cam.FogDensity = enabled ? (MinDensity + MaxDensity) * 0.5f : 0f;
+            cam.FogColor = FogColor;
+        }
     }
 }
 
@@ -105,8 +161,19 @@ public class BloomRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Threshold", ref MinThreshold, ref MaxThreshold, 0.05f, 0, 3);
-        ImGui.DragFloatRange2("Intensity", ref MinIntensity, ref MaxIntensity, 0.05f, 0, 3);
+        bool changed = ImGui.DragFloatRange2("Threshold", ref MinThreshold, ref MaxThreshold, 0.05f, 0, 3);
+        changed |= ImGui.DragFloatRange2("Intensity", ref MinIntensity, ref MaxIntensity, 0.05f, 0, 3);
+        if (changed) OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null)
+        {
+            cam.BloomThreshold = (MinThreshold + MaxThreshold) * 0.5f;
+            cam.BloomIntensity = enabled ? (MinIntensity + MaxIntensity) * 0.5f : 0f;
+        }
     }
 }
 
@@ -130,7 +197,14 @@ public class ExposureRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Exposure", ref MinExposure, ref MaxExposure, 0.05f, 0.1f, 10);
+        if (ImGui.DragFloatRange2("Exposure", ref MinExposure, ref MaxExposure, 0.05f, 0.1f, 10))
+            OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null) cam.Exposure = enabled ? (MinExposure + MaxExposure) * 0.5f : 1.0f;
     }
 }
 
@@ -156,8 +230,19 @@ public class NoiseRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Intensity", ref MinIntensity, ref MaxIntensity, 0.005f, 0, 0.5f);
-        ImGui.Checkbox("Randomize Large/Small", ref RandomizeLarge);
+        bool changed = ImGui.DragFloatRange2("Intensity", ref MinIntensity, ref MaxIntensity, 0.005f, 0, 0.5f);
+        changed |= ImGui.Checkbox("Randomize Large/Small", ref RandomizeLarge);
+        if (changed) OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null)
+        {
+            cam.NoiseIntensity = enabled ? (MinIntensity + MaxIntensity) * 0.5f : 0f;
+            cam.NoiseLarge = RandomizeLarge; // show large noise if toggled
+        }
     }
 }
 
@@ -182,8 +267,19 @@ public class AmbientOcclusionRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Radius", ref MinRadius, ref MaxRadius, 0.05f, 0.01f, 5);
-        ImGui.DragFloatRange2("Intensity", ref MinIntensity, ref MaxIntensity, 0.05f, 0, 3);
+        bool changed = ImGui.DragFloatRange2("Radius", ref MinRadius, ref MaxRadius, 0.05f, 0.01f, 5);
+        changed |= ImGui.DragFloatRange2("Intensity", ref MinIntensity, ref MaxIntensity, 0.05f, 0, 3);
+        if (changed) OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null)
+        {
+            cam.SSAORadius = (MinRadius + MaxRadius) * 0.5f;
+            cam.SSAOIntensity = enabled ? (MinIntensity + MaxIntensity) * 0.5f : 0f;
+        }
     }
 }
 
@@ -208,8 +304,19 @@ public class WhiteBalanceRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Temperature (K)", ref MinTemp, ref MaxTemp, 100, 1000, 15000);
-        ImGui.DragFloatRange2("Tint", ref MinTint, ref MaxTint, 0.05f, -2, 2);
+        bool changed = ImGui.DragFloatRange2("Temperature (K)", ref MinTemp, ref MaxTemp, 100, 1000, 15000);
+        changed |= ImGui.DragFloatRange2("Tint", ref MinTint, ref MaxTint, 0.05f, -2, 2);
+        if (changed) OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null)
+        {
+            cam.WhiteBalanceTemperature = enabled ? (MinTemp + MaxTemp) * 0.5f : 6500f;
+            cam.WhiteBalanceTint = enabled ? (MinTint + MaxTint) * 0.5f : 0f;
+        }
     }
 }
 
@@ -233,6 +340,13 @@ public class BlurRandomizer : RandomizerBase
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        ImGui.DragFloatRange2("Radius", ref MinRadius, ref MaxRadius, 0.1f, 0, 10);
+        if (ImGui.DragFloatRange2("Radius", ref MinRadius, ref MaxRadius, 0.1f, 0, 10))
+            OnToggle(scene, Enabled);
+    }
+
+    public override void OnToggle(SceneGraph scene, bool enabled)
+    {
+        var cam = scene.ActiveCamera;
+        if (cam != null) cam.BlurRadius = enabled ? (MinRadius + MaxRadius) * 0.5f : 0f;
     }
 }

@@ -11,3 +11,27 @@ packages/
 *.nupkg
 tmp/
 shader_error.log
+
+# SynthGen Generated Dataset
+/src/SynthGen/output/
+/src/SynthGen/labels/
+/src/SynthGen/rgb/
+/src/SynthGen/seg/
+/src/SynthGen/depth/
+*.png
+*.jpg
+*.jpeg
+*.txt
+
+# Allow assets
+!/src/SynthGen/Assets/**
+!/src/SynthGen/Randomizers/**
+!/src/SynthGen/UI/**
+!/src/SynthGen/Program.cs
+!/src/SynthGen/App/**
+!/src/SynthGen/Capture/**
+!/src/SynthGen/Rendering/**
+!/src/SynthGen/Scene/**
+!/src/SynthGen/Physics/**
+!/src/SynthGen/Annotation/**
+!/src/SynthGen/SynthGen.csproj

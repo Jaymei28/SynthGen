@@ -5,6 +5,8 @@ using SynthGen.Rendering;
 using SynthGen.Scene;
 using SynthGen.Scene.Components;
 using System.Numerics;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace SynthGen.Capture;
 
@@ -16,6 +18,7 @@ public class CaptureManager
     private readonly GL _gl;
     private readonly Renderer _renderer;
     private readonly SceneGraph _scene;
+    private readonly Physics.OceanSimulation _ocean;
 
     public bool IsGenerating { get; private set; }
     public int TotalFrames { get; set; } = 100;
@@ -31,12 +34,12 @@ public class CaptureManager
     public bool CaptureDepth { get; set; } = true;
 
     // Animation capture settings
-    public bool AnimatedCapture { get; set; } = true;
+    public bool AnimatedCapture { get; set; } = false;
     public int SubFramesPerIteration { get; set; } = 10;
     public float AnimationDuration { get; set; } = 2.0f;
 
     // Keypoint pose estimation settings
-    public bool ExportKeypointPose { get; set; } = true;
+    public bool ExportKeypointPose { get; set; } = false; // Disabled by default
     /// <summary>Bone-to-keypoint mapping. Key = COCO keypoint index (0-16), Value = skeleton bone name.</summary>
     public Dictionary<int, string> KeypointBoneMap { get; set; } = new();
 
@@ -51,11 +54,12 @@ public class CaptureManager
     public List<Randomizers.RandomizerBase> ActiveRandomizers { get; set; } = new();
     public int RandomSeed { get; set; } = 42;
 
-    public CaptureManager(GL gl, Renderer renderer, SceneGraph scene)
+    public CaptureManager(GL gl, Renderer renderer, SceneGraph scene, Physics.OceanSimulation ocean)
     {
         _gl = gl;
         _renderer = renderer;
         _scene = scene;
+        _ocean = ocean;
     }
 
     public void StartGeneration(int numFrames)
@@ -65,6 +69,7 @@ public class CaptureManager
         IsGenerating = true;
         _pendingCapture = true;
         _totalCapturedImages = 0;
+        _renderer.ShowSceneUI = false;
 
         // Create output directories
         Directory.CreateDirectory(Path.Combine(OutputDirectory, "rgb"));
@@ -100,16 +105,18 @@ public class CaptureManager
             FinalizeGeneration();
             OnLog?.Invoke("[Capture] Generation stopped by user.");
         }
+        _renderer.ShowSceneUI = true;
         IsGenerating = false;
     }
 
-    public void Update(float dt)
+    public void Update(float dt, float totalTime)
     {
         if (!IsGenerating || !_pendingCapture) return;
 
         if (CompletedFrames >= TotalFrames)
         {
             FinalizeGeneration();
+            _renderer.ShowSceneUI = true;
             IsGenerating = false;
             OnLog?.Invoke($"[Capture] Generation complete! {TotalFrames} iterations, {_totalCapturedImages} images saved.");
             return;
@@ -145,6 +152,8 @@ public class CaptureManager
 
                 // Re-render the scene at this animation pose
                 // (The renderer will pick up updated bone poses from the animation player)
+                _renderer.RenderScene(_scene, _ocean, totalTime + animTime);
+                
                 CaptureFrame(_totalCapturedImages);
                 _totalCapturedImages++;
             }
@@ -152,6 +161,8 @@ public class CaptureManager
         else
         {
             // Standard mode: single snapshot per iteration
+            _renderer.RenderScene(_scene, _ocean, totalTime);
+            
             CaptureFrame(_totalCapturedImages);
             _totalCapturedImages++;
         }
@@ -192,8 +203,8 @@ public class CaptureManager
 
         OnLog?.Invoke($"[Frame {frameIndex}] Captured RGB/Seg/Depth");
 
-        // Generate keypoint annotations
-        if (ExportKeypointPose)
+        // Generate keypoint annotations (Only if mode is set to Keypoints)
+        if (Mode == Annotation.AnnotationMode.Keypoints && ExportKeypointPose)
         {
             GenerateKeypointAnnotations(frameIndex, frameName);
         }
@@ -231,7 +242,8 @@ public class CaptureManager
                 _renderer.Width, _renderer.Height, bboxes);
         }
 
-        OnLog?.Invoke($"[Frame {frameIndex}] {bboxes.Count} objects annotated");
+        if (bboxes.Count > 0)
+            OnLog?.Invoke($"[Frame {frameIndex}] {bboxes.Count} objects annotated");
     }
 
     private void FinalizeGeneration()
@@ -242,7 +254,7 @@ public class CaptureManager
             OnLog?.Invoke("[Capture] COCO annotations saved.");
         }
 
-        if (ExportKeypointPose)
+        if (ExportKeypointPose && Mode == Annotation.AnnotationMode.Keypoints)
         {
             OnLog?.Invoke($"[Capture] Keypoint pose labels saved to keypoint_labels/");
         }
@@ -305,18 +317,31 @@ public class CaptureManager
         }
     }
 
-    private static void SaveImage(byte[] pixels, int width, int height, string path)
+    private void SaveImage(byte[] pixels, int width, int height, string path)
     {
-        // Flip vertically (OpenGL reads bottom-up)
-        var flipped = new byte[pixels.Length];
-        int rowSize = width * 4;
-        for (int y = 0; y < height; y++)
-        {
-            Array.Copy(pixels, (height - 1 - y) * rowSize, flipped, y * rowSize, rowSize);
-        }
+        // Clone pixels so the caller can reuse the buffer or move on
+        byte[] pixelsCopy = (byte[])pixels.Clone();
 
-        using var img = Image.LoadPixelData<Rgba32>(flipped, width, height);
-        img.SaveAsPng(path);
+        Task.Run(() =>
+        {
+            try
+            {
+                // Flip vertically (OpenGL reads bottom-up)
+                var flipped = new byte[pixelsCopy.Length];
+                int rowSize = width * 4;
+                for (int y = 0; y < height; y++)
+                {
+                    Array.Copy(pixelsCopy, (height - 1 - y) * rowSize, flipped, y * rowSize, rowSize);
+                }
+
+                using var img = Image.LoadPixelData<Rgba32>(flipped, width, height);
+                img.SaveAsPng(path);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Capture] Error saving image to {path}: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>

@@ -20,6 +20,26 @@ static class RandomizerHelper
         }
         return true;
     }
+
+    public static bool IsModelRoot(SceneObject obj)
+    {
+        // Only randomize transforms for top-level root objects 
+        // to prevent shattering characters/groups into pieces
+        if (obj.Parent != null) return false;
+        
+        // Prevent randomizing structural cameras/lights by ensuring it has meshes
+        return HasMeshDescendant(obj);
+    }
+    
+    private static bool HasMeshDescendant(SceneObject obj)
+    {
+        if (obj.HasComponent<MeshRendererComponent>()) return true;
+        foreach (var child in obj.Children)
+        {
+            if (HasMeshDescendant(child)) return true;
+        }
+        return false;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -37,13 +57,18 @@ public class PositionRandomizer : RandomizerBase
     {
         foreach (var obj in scene.Objects)
         {
-            if (!obj.HasComponent<MeshRendererComponent>()) continue;
+            if (!RandomizerHelper.IsModelRoot(obj)) continue;
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
-            obj.Transform.Position = new Vector3(
-                RandRange(rng, MinBounds.X, MaxBounds.X),
-                RandRange(rng, MinBounds.Y, MaxBounds.Y),
-                RandRange(rng, MinBounds.Z, MaxBounds.Z)
-            );
+            
+            var comp = obj.GetComponent<PositionRandomizerComponent>();
+            if (comp != null && comp.Enabled)
+            {
+                obj.Transform.Position = new Vector3(
+                    RandRange(rng, comp.MinBounds.X, comp.MaxBounds.X),
+                    RandRange(rng, comp.MinBounds.Y, comp.MaxBounds.Y),
+                    RandRange(rng, comp.MinBounds.Z, comp.MaxBounds.Z)
+                );
+            }
         }
     }
 
@@ -69,13 +94,18 @@ public class RotationRandomizer : RandomizerBase
     {
         foreach (var obj in scene.Objects)
         {
-            if (!obj.HasComponent<MeshRendererComponent>()) continue;
+            if (!RandomizerHelper.IsModelRoot(obj)) continue;
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
-            obj.Transform.Rotation = new Vector3(
-                RandRange(rng, MinAngles.X, MaxAngles.X),
-                RandRange(rng, MinAngles.Y, MaxAngles.Y),
-                RandRange(rng, MinAngles.Z, MaxAngles.Z)
-            );
+            
+            var comp = obj.GetComponent<RotationRandomizerComponent>();
+            if (comp != null && comp.Enabled)
+            {
+                obj.Transform.Rotation = new Vector3(
+                    RandRange(rng, comp.MinAngles.X, comp.MaxAngles.X),
+                    RandRange(rng, comp.MinAngles.Y, comp.MaxAngles.Y),
+                    RandRange(rng, comp.MinAngles.Z, comp.MaxAngles.Z)
+                );
+            }
         }
     }
 
@@ -102,21 +132,25 @@ public class ScaleRandomizer : RandomizerBase
     {
         foreach (var obj in scene.Objects)
         {
-            if (!obj.HasComponent<MeshRendererComponent>()) continue;
+            if (!RandomizerHelper.IsModelRoot(obj)) continue;
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
 
-            if (UniformScale)
+            var comp = obj.GetComponent<ScaleRandomizerComponent>();
+            if (comp != null && comp.Enabled)
             {
-                float s = RandRange(rng, MinScale, MaxScale);
-                obj.Transform.Scale = new Vector3(s, s, s);
-            }
-            else
-            {
-                obj.Transform.Scale = new Vector3(
-                    RandRange(rng, MinScale, MaxScale),
-                    RandRange(rng, MinScale, MaxScale),
-                    RandRange(rng, MinScale, MaxScale)
-                );
+                if (comp.UniformScale)
+                {
+                    float s = RandRange(rng, comp.MinScale, comp.MaxScale);
+                    obj.Transform.Scale = new Vector3(s, s, s);
+                }
+                else
+                {
+                    obj.Transform.Scale = new Vector3(
+                        RandRange(rng, comp.MinScale, comp.MaxScale),
+                        RandRange(rng, comp.MinScale, comp.MaxScale),
+                        RandRange(rng, comp.MinScale, comp.MaxScale)
+                    );
+                }
             }
         }
     }
@@ -150,6 +184,9 @@ public class TextureRandomizer : RandomizerBase
             var mr = obj.GetComponent<MeshRendererComponent>();
             if (mr == null) continue;
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
+
+            var comp = obj.GetComponent<TextureRandomizerComponent>();
+            if (comp == null || !comp.Enabled) continue;
 
             string texPath = TexturePaths[rng.Next(TexturePaths.Count)];
             uint texId = LoadTextureFunc(texPath);
@@ -190,10 +227,18 @@ public class DepthScaleMapper : RandomizerBase
             if (!obj.HasComponent<MeshRendererComponent>()) continue;
             if (!RandomizerHelper.ShouldRandomize(obj)) continue;
 
-            float dist = Vector3.Distance(cam.Transform.Position, obj.Transform.Position);
-            float t = MathF.Min(dist / ReferenceDistance, 1f);
-            float scale = MathF.Max(0.1f, NearScale + (FarScale - NearScale) * t);
-            obj.Transform.Scale = new Vector3(scale, scale, scale);
+            var comp = obj.GetComponent<DepthScaleComponent>();
+            if (comp != null && comp.Enabled)
+            {
+                float nearS = comp.NearScale;
+                float farS = comp.FarScale;
+                float refDist = comp.ReferenceDistance;
+
+                float dist = Vector3.Distance(cam.Transform.Position, obj.Transform.Position);
+                float t = MathF.Min(dist / refDist, 1f);
+                float scale = MathF.Max(0.1f, nearS + (farS - nearS) * t);
+                obj.Transform.Scale = new Vector3(scale, scale, scale);
+            }
         }
     }
 

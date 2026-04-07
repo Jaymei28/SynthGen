@@ -49,7 +49,7 @@ public class UIManager
     // Settings
     private Annotation.AnnotationMode _annotationMode = Annotation.AnnotationMode.BoundingBox;
 
-    private bool _uiLocked = false;
+    private bool _uiLocked = true;
     private float _preFocusDistance = -1f; // -1 = not focused
     private const float ToolbarHeight = 48f;
 
@@ -217,8 +217,7 @@ public class UIManager
         var flags = extra;
         if (_uiLocked) 
         {
-            flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse 
-                  | ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoNavFocus | ImGuiWindowFlags.NoDocking;
+            flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoDocking;
         }
         return flags;
     }
@@ -941,27 +940,65 @@ public class UIManager
         foreach (var obj in _app.Scene.Objects)
         {
             var label = obj.GetComponent<LabelComponent>();
-            if (label == null || !WorldToScreen(obj.GetWorldMatrix().Translation, out Vector2 screenPos)) continue;
-            
-            // Draw 3D Box Wireframe
-            var mr = obj.GetComponent<MeshRendererComponent>();
-            if (mr?.Mesh != null)
+            if (label == null) continue;
+
+            // --- Skeleton Bone Filtering ---
+            // If an ancestor already has a label, skip it to avoid clutter.
+            bool ancestorLabeled = false;
+            var p = obj.Parent;
+            while (p != null) { if (p.HasComponent<LabelComponent>()) { ancestorLabeled = true; break; } p = p.Parent; }
+            if (ancestorLabeled) continue;
+
+            // --- Find All Meshes ---
+            var relevantMeshes = new List<(SceneObject o, Rendering.Mesh m)>();
+            FindMeshesInGroup(obj, (o, m) => relevantMeshes.Add((o, m)));
+
+            // --- Compute Target Position (Top-Center of group) ---
+            Vector3 centerSum = Vector3.Zero;
+            float highestY = -1000f;
+            foreach (var (mObj, mesh) in relevantMeshes)
             {
-                DrawOriented3DBox(obj, mr.Mesh, label.SegmentationColor);
+                var model = mObj.GetWorldMatrix();
+                if (mesh.HasSkinning && mesh.Skeleton != null && mesh.PrimaryBoneIndex >= 0)
+                {
+                    var boneMats = mesh.Skeleton.GetFinalMatrices();
+                    if (mesh.PrimaryBoneIndex < boneMats.Length)
+                        model = boneMats[mesh.PrimaryBoneIndex] * model;
+                }
+                centerSum += model.Translation;
+                highestY = MathF.Max(highestY, model.Translation.Y + 1.2f); // Offset to head height
+                DrawOriented3DBox(mObj, mesh, label.SegmentationColor);
             }
+
+            Vector3 labelWorldPos = relevantMeshes.Count > 0 
+                ? new Vector3(centerSum.X / relevantMeshes.Count, highestY, centerSum.Z / relevantMeshes.Count)
+                : obj.GetWorldMatrix().Translation;
+
+            if (!WorldToScreen(labelWorldPos, out Vector2 screenPos)) continue;
  
             // Simple 2D Label Badge
             string text = $"[{label.ClassName}] #{label.ClassID}";
             Vector2 textSize = ImGui.CalcTextSize(text);
             Vector2 boxSize = textSize + new Vector2(12, 6);
-            Vector2 pMin = screenPos - new Vector2(boxSize.X / 2, 45);
+            Vector2 pMin = screenPos - new Vector2(boxSize.X / 2, 0); // At the point
             Vector2 pMax = pMin + boxSize;
             
             Vector4 col = new Vector4(label.SegmentationColor, 1.0f);
             drawList.AddRectFilled(pMin, pMax, ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f)), 4f);
             drawList.AddRect(pMin, pMax, ImGui.GetColorU32(col), 4f, 0, 2f);
             drawList.AddText(pMin + new Vector2(6, 3), ImGui.GetColorU32(Vector4.One), text);
-            drawList.AddLine(screenPos, pMin + new Vector2(boxSize.X / 2, boxSize.Y), ImGui.GetColorU32(new Vector4(1,1,1,0.3f)), 1f);
+        }
+    }
+
+    private void FindMeshesInGroup(SceneObject obj, Action<SceneObject, Rendering.Mesh> action)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr?.Mesh != null) action(obj, mr.Mesh);
+
+        foreach (var child in obj.Children)
+        {
+            if (child.HasComponent<LabelComponent>()) continue;
+            FindMeshesInGroup(child, action);
         }
     }
  
@@ -1313,10 +1350,11 @@ public class UIManager
             var anim = animObj.GetComponent<AnimationPlayerComponent>()!;
             var animMr = animObj.GetComponent<MeshRendererComponent>()!;
             
-            ImGui.Text($"Available Tracks: {animMr.Mesh.Clips.Count}");
+            int clipCount = animMr.Mesh?.Clips.Count ?? 0;
+            ImGui.Text($"Available Tracks: {clipCount}");
             
-            string[] clipNames = new string[animMr.Mesh.Clips.Count];
-            for (int i = 0; i < animMr.Mesh.Clips.Count; i++) clipNames[i] = string.IsNullOrEmpty(animMr.Mesh.Clips[i].Name) ? $"Track {i}" : animMr.Mesh.Clips[i].Name;
+            string[] clipNames = new string[clipCount];
+            for (int i = 0; i < clipCount; i++) clipNames[i] = string.IsNullOrEmpty(animMr.Mesh!.Clips[i].Name) ? $"Track {i}" : animMr.Mesh.Clips[i].Name;
             
             int current = anim.CurrentClipIndex;
             if (ImGui.Combo("Clip", ref current, clipNames, clipNames.Length))
@@ -1396,6 +1434,88 @@ public class UIManager
         ImGui.SameLine();
         HelpMarker("When enabled, position/rotation/scale/texture randomizers will skip this object and all its children.");
 
+        // ── Custom Randomizer Overrides ──
+        var posRand = sel.GetComponent<PositionRandomizerComponent>();
+        if (posRand != null)
+        {
+            if (ImGui.CollapsingHeader("Position Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                ImGui.Checkbox("Enabled##pos_rand", ref posRand.Enabled);
+                ImGui.DragFloat3("Min Bounds##pos_rand", ref posRand.MinBounds, 0.1f);
+                ImGui.DragFloat3("Max Bounds##pos_rand", ref posRand.MaxBounds, 0.1f);
+                if (ImGui.Button("Remove Position Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<PositionRandomizerComponent>();
+            }
+        }
+        else
+        {
+            if (ImGui.Button("Add Position Randomizer", new Vector2(-1, 0))) sel.AddComponent(new PositionRandomizerComponent());
+        }
+
+        var rotRand = sel.GetComponent<RotationRandomizerComponent>();
+        if (rotRand != null)
+        {
+            if (ImGui.CollapsingHeader("Rotation Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                ImGui.Checkbox("Enabled##rot_rand", ref rotRand.Enabled);
+                ImGui.DragFloat3("Min Angles##rot_rand", ref rotRand.MinAngles, 1f);
+                ImGui.DragFloat3("Max Angles##rot_rand", ref rotRand.MaxAngles, 1f);
+                if (ImGui.Button("Remove Rotation Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<RotationRandomizerComponent>();
+            }
+        }
+        else
+        {
+            if (ImGui.Button("Add Rotation Randomizer", new Vector2(-1, 0))) sel.AddComponent(new RotationRandomizerComponent());
+        }
+
+        var sclRand = sel.GetComponent<ScaleRandomizerComponent>();
+        if (sclRand != null)
+        {
+            if (ImGui.CollapsingHeader("Scale Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                ImGui.Checkbox("Enabled##scl_rand", ref sclRand.Enabled);
+                ImGui.DragFloat("Min Scale##scl_rand", ref sclRand.MinScale, 0.05f, 0.01f, 10f);
+                ImGui.DragFloat("Max Scale##scl_rand", ref sclRand.MaxScale, 0.05f, 0.01f, 10f);
+                ImGui.Checkbox("Uniform Scale##scl_rand", ref sclRand.UniformScale);
+                if (ImGui.Button("Remove Scale Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<ScaleRandomizerComponent>();
+            }
+        }
+        else
+        {
+            if (ImGui.Button("Add Scale Randomizer", new Vector2(-1, 0))) sel.AddComponent(new ScaleRandomizerComponent());
+        }
+
+        var depthRand = sel.GetComponent<DepthScaleComponent>();
+        if (depthRand != null)
+        {
+            if (ImGui.CollapsingHeader("Depth Scale (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                ImGui.Checkbox("Enabled##depth_rand", ref depthRand.Enabled);
+                ImGui.DragFloat("Near Scale##depth_rand", ref depthRand.NearScale, 0.05f, 0.1f, 5f);
+                ImGui.DragFloat("Far Scale##depth_rand", ref depthRand.FarScale, 0.05f, 0.1f, 5f);
+                ImGui.DragFloat("Reference Dist##depth_rand", ref depthRand.ReferenceDistance, 0.5f, 1f, 100f);
+                if (ImGui.Button("Remove Depth Scale", new Vector2(-1, 0))) sel.RemoveComponent<DepthScaleComponent>();
+            }
+        }
+        else
+        {
+            if (ImGui.Button("Add Depth Scale Randomizer", new Vector2(-1, 0))) sel.AddComponent(new DepthScaleComponent());
+        }
+
+        var texRand = sel.GetComponent<TextureRandomizerComponent>();
+        if (texRand != null)
+        {
+            if (ImGui.CollapsingHeader("Texture Randomizer (Override)", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                ImGui.Checkbox("Enabled##tex_rand", ref texRand.Enabled);
+                if (ImGui.Button("Remove Texture Randomizer", new Vector2(-1, 0))) sel.RemoveComponent<TextureRandomizerComponent>();
+            }
+        }
+        else
+        {
+            if (ImGui.Button("Add Texture Randomizer", new Vector2(-1, 0))) sel.AddComponent(new TextureRandomizerComponent());
+        }
+
+        ImGui.Separator();
         if (ImGui.Button("Add Buoyancy") && buoy == null)
         {
             sel.AddComponent(new BuoyantBodyComponent());
@@ -1426,8 +1546,11 @@ public class UIManager
             }
 
             bool enabled = r.Enabled;
-            ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref enabled);
-            r.Enabled = enabled;
+            if (ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref enabled))
+            {
+                r.Enabled = enabled;
+                r.OnToggle(_app.Scene, enabled);
+            }
 
             if (r.Enabled)
             {
@@ -1462,7 +1585,7 @@ public class UIManager
         var ocean = _app.Ocean;
         var cfg = ocean.Config;
 
-        if (ImGui.Begin("Ocean Editor (Sync Mode)"))
+        if (ImGui.Begin("Ocean Editor (Sync Mode)", GetWindowFlags()))
         {
             ImGui.Checkbox("Ocean Enabled", ref cfg.Enabled);
             ImGui.Separator();
@@ -1536,9 +1659,12 @@ public class UIManager
         cap.Mode = _annotationMode;
 
         bool yolo = cap.ExportYOLO, coco = cap.ExportCOCO;
-        ImGui.Checkbox("YOLO", ref yolo); cap.ExportYOLO = yolo;
+        if (ImGui.Checkbox("YOLO", ref yolo)) cap.ExportYOLO = yolo;
         ImGui.SameLine();
-        ImGui.Checkbox("COCO", ref coco); cap.ExportCOCO = coco;
+        if (ImGui.Checkbox("COCO", ref coco)) cap.ExportCOCO = coco;
+        ImGui.SameLine();
+        bool exportKp = cap.ExportKeypointPose;
+        if (ImGui.Checkbox("Keypoints", ref exportKp)) cap.ExportKeypointPose = exportKp;
 
         ImGui.Separator();
         ImGui.TextColored(new Vector4(1, 0.8f, 0.3f, 1), "Animation Capture");
@@ -1609,20 +1735,9 @@ public class UIManager
         };
         obj.AddComponent(mr);
 
-        // Auto-assign a label with unique color
-        var label = new LabelComponent
-        {
-            ClassName = type.ToLower(),
-            ClassID = _app.Scene.ObjectCount,
-        };
-        // Generate unique color from instance ID
-        float hue = (label.InstanceID * 0.618033988749895f) % 1.0f;
-        label.SegmentationColor = HsvToRgb(hue, 0.9f, 0.9f);
-        obj.AddComponent(label);
-
         _app.Scene.AddObject(obj);
         _app.Scene.SelectedObject = obj;
-        AddLog($"[Scene] Added {type}");
+        AddLog($"[Scene] Added {type} (unlabeled)");
     }
 
     private void AddModelFromFile(string path)
@@ -1630,30 +1745,12 @@ public class UIManager
         var root = _app.AssetManager.ImportModelHierarchical(path, AddLog);
         if (root == null) return;
  
-        // Assign unique labels to the root AND every child in the hierarchy
-        // This mirrors Unity: each mesh is an independent render unit with its own identity
-        int baseID = _app.Scene.ObjectCount + 1;
-        AssignLabelsRecursive(root, Path.GetFileNameWithoutExtension(path), ref baseID);
- 
+        // Auto-labeling DISABLED. Users must manually add labels via the Inspector.
+        // This prevents character models from exploding with 100+ unwanted labels on bones.
+
         _app.Scene.AddObject(root);
         _app.Scene.SelectedObject = root;
-        AddLog($"[Assets] Hierarchically imported {Path.GetFileName(path)} with all textures.");
-    }
-
-    private void AssignLabelsRecursive(SceneObject obj, string className, ref int nextID)
-    {
-        var label = new LabelComponent
-        {
-            ClassName = className,
-            ClassID = nextID++,
-        };
-        // Generate unique color from instance ID using golden ratio for max separation
-        float hue = (label.InstanceID * 0.618033988749895f) % 1.0f;
-        label.SegmentationColor = HsvToRgb(hue, 0.9f, 0.9f);
-        obj.AddComponent(label);
-
-        foreach (var child in obj.Children)
-            AssignLabelsRecursive(child, className, ref nextID);
+        AddLog($"[Assets] Hierarchically imported {Path.GetFileName(path)}. Use 'Add Label' in Inspector to annotate.");
     }
  
     private void Legacy_Loader_Removed(string path)

@@ -14,6 +14,9 @@ public abstract class RandomizerBase
     /// <summary>Apply randomization to the scene.</summary>
     public abstract void Randomize(SceneGraph scene, Random rng);
 
+    /// <summary>Called when the randomizer is toggled on or off in the UI.</summary>
+    public virtual void OnToggle(SceneGraph scene, bool enabled) { }
+
     /// <summary>Draw ImGui configuration UI for this randomizer.</summary>
     public abstract void DrawConfigUI(SceneGraph scene);
 

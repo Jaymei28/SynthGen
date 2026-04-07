@@ -68,6 +68,7 @@ public class Renderer : IDisposable
     public uint HdriTextureID { get; set; } = 0;
     public float HdriStrength { get; set; } = 1.0f;
     public IEnumerable<SceneObject> SelectedObjects { get; set; } = Array.Empty<SceneObject>();
+    public bool ShowSceneUI { get; set; } = true;
 
     public Renderer(GL gl, int width, int height)
     {
@@ -185,7 +186,10 @@ public class Renderer : IDisposable
         }
 
         // Draw grid
-        DrawGrid(view, proj);
+        if (ShowSceneUI)
+        {
+            DrawGrid(view, proj);
+        }
 
         _gl.DepthMask(true);
         _gl.Enable(EnableCap.CullFace);
@@ -194,7 +198,7 @@ public class Renderer : IDisposable
         _rgbFbo.Unbind();
 
         // ── Selection Outline (screen-space, after RGB is complete) ───────
-        if (SelectedObjects.Any())
+        if (ShowSceneUI && SelectedObjects.Any())
             DrawSelectionHighlight(SelectedObjects, view, proj);
 
         // ── Segmentation Pass ─────────────────────────────────────────────
@@ -349,12 +353,25 @@ public class Renderer : IDisposable
         foreach (var obj in scene.Objects)
         {
             var mr = obj.GetComponent<MeshRendererComponent>();
-            var label = obj.GetComponent<LabelComponent>();
-            if (mr?.Mesh == null || !mr.Visible || label == null) continue;
+            if (mr?.Mesh == null || !mr.Visible) continue;
+
+            // --- Hierarchical Label & Group Search ---
+            LabelComponent? label = null;
+            string groupName = "None";
+            var curr = obj;
+            while (curr != null)
+            {
+                if (label == null) label = curr.GetComponent<LabelComponent>();
+                if (groupName == "None") groupName = curr.BodyPartGroup;
+                if (label != null && groupName != "None") break;
+                curr = curr.Parent;
+            }
+
+            if (label == null) continue;
 
             // Use body part group color if assigned, otherwise fallback to label color
             Vector3 segColor = label.SegmentationColor;
-            var groupColor = SynthGen.Scene.Components.BodyPartGroups.GetColor(obj.BodyPartGroup);
+            var groupColor = SynthGen.Scene.Components.BodyPartGroups.GetColor(groupName);
             if (groupColor.HasValue)
                 segColor = groupColor.Value;
 

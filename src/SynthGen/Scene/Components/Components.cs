@@ -98,3 +98,41 @@ public class BuoyantBodyComponent
     public Vector3 LastPosition = Vector3.Zero;   // To detect manual moves
     public float Velocity = 0f;                   // for damped spring
 }
+
+// ── Randomizer Overrides ───────────────────────────────────────────────────
+public class PositionRandomizerComponent
+{
+    public bool Enabled = true;
+    public Vector3 MinBounds = new(-5, 0, -5);
+    public Vector3 MaxBounds = new(5, 5, 5);
+}
+
+public class RotationRandomizerComponent
+{
+    public bool Enabled = true;
+    public Vector3 MinAngles = new(-180, -180, -180);
+    public Vector3 MaxAngles = new(180, 180, 180);
+}
+
+public class ScaleRandomizerComponent
+{
+    public bool Enabled = true;
+    public float MinScale = 0.5f;
+    public float MaxScale = 2.0f;
+    public bool UniformScale = true;
+}
+
+public class TextureRandomizerComponent
+{
+    public bool Enabled = true;
+    // For now, it will just use the global pool if enabled, 
+    // but we could add specific texture filters here later.
+}
+
+public class DepthScaleComponent
+{
+    public bool Enabled = true;
+    public float NearScale = 2.0f;
+    public float FarScale = 0.3f;
+    public float ReferenceDistance = 10f;
+}
