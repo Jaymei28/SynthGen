@@ -42,6 +42,7 @@ public class Application
     public Capture.CaptureManager CaptureManager => _captureManager;
     public Training.TrainingManager TrainingManager => _trainingManager;
     public InputManager Input => _inputManager;
+    public Commands.CommandHistory CommandHistory { get; } = new();
 
     public float DeltaTime => _deltaTime;
     public float TotalTime => _totalTime;

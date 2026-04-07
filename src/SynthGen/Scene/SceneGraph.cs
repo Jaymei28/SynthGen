@@ -36,8 +36,19 @@ public class SceneGraph
     public void RemoveObject(SceneObject obj)
     {
         SelectedObjects.Remove(obj);
-        _objects.Remove(obj);
-        foreach (var child in obj.Children) RemoveObject(child);
+        if (SelectedObject == obj) SelectedObject = null;
+        
+        if (obj.Parent != null)
+        {
+            obj.Parent.Children.Remove(obj);
+        }
+        else
+        {
+            _objects.Remove(obj);
+        }
+        
+        foreach (var child in obj.Children.ToList()) 
+            RemoveObject(child);
     }
 
     public void Clear()

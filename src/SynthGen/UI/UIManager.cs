@@ -53,7 +53,6 @@ public class UIManager
     private float _preFocusDistance = -1f; // -1 = not focused
     private const float ToolbarHeight = 48f;
 
-    private SceneObject? _lastDeletedObject; // For simple one-step Undo
 
     // Training panel state
     private bool _showTrainingPanel = false;
@@ -140,29 +139,62 @@ public class UIManager
             // DELETE
             if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Delete) && sel != null)
             {
-                _lastDeletedObject = sel;
-                _app.Scene.RemoveObject(sel);
+                var target = sel;
+                var parent = target.Parent;
+                _app.Scene.RemoveObject(target);
+                _app.CommandHistory.Push(new Commands.ActionCommand(
+                    undoAction: () => { 
+                        if (parent != null) parent.AddChild(target); 
+                        else _app.Scene.AddObject(target); 
+                        _app.Scene.SelectedObject = target; 
+                    },
+                    redoAction: () => { 
+                        _app.Scene.RemoveObject(target); 
+                        _app.Scene.SelectedObject = null; 
+                    },
+                    onExecute: () => { } // Already executed
+                ));
                 AddLog($"[Scene] Deleted {sel.Name}. Press Ctrl+Z to undo.");
             }
 
             // DUPLICATE (Ctrl+D)
             if (_app.Input.CtrlHeld && _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.D) && sel != null)
             {
-                var clone = sel.Clone();
+                var target = sel;
+                var clone = target.Clone();
                 _app.Scene.AddObject(clone);
                 _app.Scene.SelectedObject = clone;
-                AddLog($"[Scene] Duplicated {sel.Name}");
+                _app.CommandHistory.Push(new Commands.ActionCommand(
+                    undoAction: () => { 
+                        _app.Scene.RemoveObject(clone); 
+                        _app.Scene.SelectedObject = target; 
+                    },
+                    redoAction: () => { 
+                        _app.Scene.AddObject(clone); 
+                        _app.Scene.SelectedObject = clone; 
+                    },
+                    onExecute: () => { } // Already executed
+                ));
+                AddLog($"[Scene] Duplicated {target.Name}");
             }
 
-            // UNDO (Ctrl+Z) - Simple one-step restore for deleted objects
+            // UNDO (Ctrl+Z)
             if (_app.Input.CtrlHeld && _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Z))
             {
-                if (_lastDeletedObject != null && !_app.Scene.Objects.Contains(_lastDeletedObject))
+                if (_app.CommandHistory.CanUndo)
                 {
-                    _app.Scene.AddObject(_lastDeletedObject);
-                    _app.Scene.SelectedObject = _lastDeletedObject;
-                    AddLog($"[Scene] Restored {_lastDeletedObject.Name}");
-                    _lastDeletedObject = null;
+                    _app.CommandHistory.Undo();
+                    AddLog($"[Scene] Undo");
+                }
+            }
+
+            // REDO (Ctrl+Y)
+            if (_app.Input.CtrlHeld && _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Y))
+            {
+                if (_app.CommandHistory.CanRedo)
+                {
+                    _app.CommandHistory.Redo();
+                    AddLog($"[Scene] Redo");
                 }
             }
 
@@ -1211,9 +1243,9 @@ public class UIManager
         // ── Transform ──
         if (ImGui.CollapsingHeader("Transform", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            ImGui.DragFloat3("Position", ref sel.Transform.Position, 0.1f);
-            ImGui.DragFloat3("Rotation", ref sel.Transform.Rotation, 1f);
-            ImGui.DragFloat3("Scale", ref sel.Transform.Scale, 0.05f);
+            UndoableDragFloat3("Position", sel.Transform.Position, v => sel.Transform.Position = v, 0.1f);
+            UndoableDragFloat3("Rotation", sel.Transform.Rotation, v => sel.Transform.Rotation = v, 1f);
+            UndoableDragFloat3("Scale", sel.Transform.Scale, v => sel.Transform.Scale = v, 0.05f);
         }
 
         // ── Label ──
@@ -1231,7 +1263,7 @@ public class UIManager
                 label.ClassName = System.Text.Encoding.UTF8.GetString(nameBuffer).TrimEnd('\0');
             }
 
-            ImGui.ColorEdit3("Seg Color", ref label.SegmentationColor);
+            UndoableColorEdit3("Seg Color", label.SegmentationColor, v => label.SegmentationColor = v);
             ImGui.Text($"Instance ID: {label.InstanceID}");
         }
 
@@ -1261,18 +1293,17 @@ public class UIManager
                 }
                 ImGui.Separator();
             }
-
             if (mr != null)
             {
-                ImGui.ColorEdit4("Base Color", ref mr.Material.BaseColor);
-                ImGui.SliderFloat("Smoothness", ref mr.Material.Smoothness, 0, 1);
-                ImGui.SliderFloat("Metallic", ref mr.Material.Metallic, 0, 1);
-                ImGui.DragFloat("Normal Scale", ref mr.Material.NormalScale, 0.01f, 0, 8);
+                UndoableColorEdit4("Base Color", mr.Material.BaseColor, v => mr.Material.BaseColor = v);
+                UndoableSliderFloat("Smoothness", mr.Material.Smoothness, v => mr.Material.Smoothness = v, 0f, 1f);
+                UndoableSliderFloat("Metallic", mr.Material.Metallic, v => mr.Material.Metallic = v, 0f, 1f);
+                UndoableDragFloat("Normal Scale", mr.Material.NormalScale, v => mr.Material.NormalScale = v, 0.01f, 0f, 8f);
                 
                 if (ImGui.CollapsingHeader("Emission"))
                 {
-                    ImGui.ColorEdit3("Emissive Color", ref mr.Material.EmissiveColor);
-                    ImGui.DragFloat("Emissive Intensity", ref mr.Material.EmissiveIntensity, 0.1f, 0, 100);
+                    UndoableColorEdit3("Emissive Color", mr.Material.EmissiveColor, v => mr.Material.EmissiveColor = v);
+                    UndoableDragFloat("Emissive Intensity", mr.Material.EmissiveIntensity, v => mr.Material.EmissiveIntensity = v, 0.1f, 0f, 100f);
                 }
 
                 ImGui.Checkbox("Visible", ref mr.Visible);
@@ -1343,31 +1374,19 @@ public class UIManager
 
             // --- Smoothness ---
             float smoothness = firstMr?.Material.Smoothness ?? 0.5f;
-            if (ImGui.SliderFloat("Smoothness", ref smoothness, 0f, 1f))
-            {
-                ApplyMaterialPropertyRecursive(sel, m => m.Smoothness = smoothness);
-            }
+            UndoableSliderFloat("Smoothness", smoothness, v => ApplyMaterialPropertyRecursive(sel, m => m.Smoothness = v), 0f, 1f);
 
             // --- Metallic ---
             float metallic = firstMr?.Material.Metallic ?? 0.0f;
-            if (ImGui.SliderFloat("Metallic", ref metallic, 0f, 1f))
-            {
-                ApplyMaterialPropertyRecursive(sel, m => m.Metallic = metallic);
-            }
+            UndoableSliderFloat("Metallic", metallic, v => ApplyMaterialPropertyRecursive(sel, m => m.Metallic = v), 0f, 1f);
 
             // --- Normal Scale ---
             float nScale = firstMr?.Material.NormalScale ?? 1.0f;
-            if (ImGui.SliderFloat("Normal Scale", ref nScale, 0f, 5f))
-            {
-                ApplyMaterialPropertyRecursive(sel, m => m.NormalScale = nScale);
-            }
+            UndoableSliderFloat("Normal Scale", nScale, v => ApplyMaterialPropertyRecursive(sel, m => m.NormalScale = v), 0f, 5f);
 
             // --- Color Intensity ---
             float cIntensity = firstMr?.Material.ColorIntensity ?? 1.0f;
-            if (ImGui.SliderFloat("Color Intensity", ref cIntensity, 0f, 5f))
-            {
-                ApplyMaterialPropertyRecursive(sel, m => m.ColorIntensity = cIntensity);
-            }
+            UndoableSliderFloat("Color Intensity", cIntensity, v => ApplyMaterialPropertyRecursive(sel, m => m.ColorIntensity = v), 0f, 5f);
         }
 
         // ── Light ──
@@ -1375,11 +1394,13 @@ public class UIManager
         if (light != null && ImGui.CollapsingHeader("Light", ImGuiTreeNodeFlags.DefaultOpen))
         {
             int lt = (int)light.LightType;
-            ImGui.Combo("Type", ref lt, "Directional\0Point\0Spot\0");
-            light.LightType = (LightType)lt;
+            if (ImGui.Combo("Type", ref lt, "Directional\0Point\0Spot\0"))
+            {
+                light.LightType = (LightType)lt;
+            }
 
-            ImGui.ColorEdit3("Color", ref light.Color);
-            ImGui.DragFloat("Intensity", ref light.Intensity, 0.05f, 0, 10);
+            UndoableColorEdit3("Color", light.Color, v => light.Color = v);
+            UndoableDragFloat("Intensity", light.Intensity, v => light.Intensity = v, 0.05f, 0f, 10f);
             ImGui.Checkbox("Cast Shadow", ref light.CastShadow);
         }
 
@@ -1388,9 +1409,9 @@ public class UIManager
         if (buoy != null && ImGui.CollapsingHeader("Buoyancy", ImGuiTreeNodeFlags.DefaultOpen))
         {
             ImGui.Checkbox("Enabled", ref buoy.Enabled);
-            ImGui.DragFloat("Waterline", ref buoy.Waterline, 0.05f, -10, 10);
-            ImGui.SliderFloat("Bob Intensity", ref buoy.BobIntensity, 0, 5);
-            ImGui.SliderFloat("Tilt Intensity", ref buoy.TiltIntensity, 0, 5);
+            UndoableDragFloat("Waterline", buoy.Waterline, v => buoy.Waterline = v, 0.05f, -10f, 10f);
+            UndoableSliderFloat("Bob Intensity", buoy.BobIntensity, v => buoy.BobIntensity = v, 0f, 5f);
+            UndoableSliderFloat("Tilt Intensity", buoy.TiltIntensity, v => buoy.TiltIntensity = v, 0f, 5f);
             
             if (ImGui.Button("Snap to Surface"))
             {
@@ -2284,6 +2305,109 @@ public class UIManager
         }
         foreach (var child in obj.Children)
             SyncAnimRecursive(child, source);
+    }
+
+    // ── Undoable UI Wrappers ──
+    private object? _dragInitialValue;
+
+    private bool UndoableDragFloat3(string label, Vector3 currentValue, Action<Vector3> setter, float speed = 1f)
+    {
+        Vector3 val = currentValue;
+        bool changed = ImGui.DragFloat3(label, ref val, speed);
+        
+        if (ImGui.IsItemActivated()) _dragInitialValue = currentValue;
+        if (changed) setter(val);
+        
+        if (ImGui.IsItemDeactivatedAfterEdit() && _dragInitialValue is Vector3 oldVal)
+        {
+            Vector3 newVal = val;
+            _app.CommandHistory.Push(new Commands.ActionCommand(
+                () => setter(oldVal),
+                () => setter(newVal)
+            ));
+            _dragInitialValue = null;
+        }
+        return changed;
+    }
+
+    private bool UndoableDragFloat(string label, float currentValue, Action<float> setter, float speed = 1f, float min = 0f, float max = 0f)
+    {
+        float val = currentValue;
+        bool changed = ImGui.DragFloat(label, ref val, speed, min, max);
+        
+        if (ImGui.IsItemActivated()) _dragInitialValue = currentValue;
+        if (changed) setter(val);
+        
+        if (ImGui.IsItemDeactivatedAfterEdit() && _dragInitialValue is float oldVal)
+        {
+            float newVal = val;
+            _app.CommandHistory.Push(new Commands.ActionCommand(
+                () => setter(oldVal),
+                () => setter(newVal)
+            ));
+            _dragInitialValue = null;
+        }
+        return changed;
+    }
+
+    private bool UndoableSliderFloat(string label, float currentValue, Action<float> setter, float min, float max)
+    {
+        float val = currentValue;
+        bool changed = ImGui.SliderFloat(label, ref val, min, max);
+        
+        if (ImGui.IsItemActivated()) _dragInitialValue = currentValue;
+        if (changed) setter(val);
+        
+        if (ImGui.IsItemDeactivatedAfterEdit() && _dragInitialValue is float oldVal)
+        {
+            float newVal = val;
+            _app.CommandHistory.Push(new Commands.ActionCommand(
+                () => setter(oldVal),
+                () => setter(newVal)
+            ));
+            _dragInitialValue = null;
+        }
+        return changed;
+    }
+
+    private bool UndoableColorEdit3(string label, Vector3 currentValue, Action<Vector3> setter)
+    {
+        Vector3 val = currentValue;
+        bool changed = ImGui.ColorEdit3(label, ref val);
+        
+        if (ImGui.IsItemActivated()) _dragInitialValue = currentValue;
+        if (changed) setter(val);
+        
+        if (ImGui.IsItemDeactivatedAfterEdit() && _dragInitialValue is Vector3 oldVal)
+        {
+            Vector3 newVal = val;
+            _app.CommandHistory.Push(new Commands.ActionCommand(
+                () => setter(oldVal),
+                () => setter(newVal)
+            ));
+            _dragInitialValue = null;
+        }
+        return changed;
+    }
+
+    private bool UndoableColorEdit4(string label, Vector4 currentValue, Action<Vector4> setter)
+    {
+        Vector4 val = currentValue;
+        bool changed = ImGui.ColorEdit4(label, ref val);
+        
+        if (ImGui.IsItemActivated()) _dragInitialValue = currentValue;
+        if (changed) setter(val);
+        
+        if (ImGui.IsItemDeactivatedAfterEdit() && _dragInitialValue is Vector4 oldVal)
+        {
+            Vector4 newVal = val;
+            _app.CommandHistory.Push(new Commands.ActionCommand(
+                () => setter(oldVal),
+                () => setter(newVal)
+            ));
+            _dragInitialValue = null;
+        }
+        return changed;
     }
 
     private static void HelpMarker(string desc)
