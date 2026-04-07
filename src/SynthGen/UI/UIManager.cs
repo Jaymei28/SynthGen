@@ -1542,14 +1542,48 @@ public class UIManager
             ImGui.TextColored(new Vector4(1f, 1f, 0.3f, 1), $"🎯 Editing: [{selKp.KeypointIndex}] {selKp.KeypointName}");
             if (!string.IsNullOrEmpty(selKp.BoundBoneName))
             {
-                ImGui.TextColored(new Vector4(0.5f, 1f, 0.8f, 1), $"🔗 Bound to bone: {selKp.BoundBoneName}");
-                ImGui.TextWrapped("This keypoint follows the skeleton animation automatically.");
+                ImGui.TextColored(new Vector4(0.5f, 1f, 0.8f, 1), $"🔗 Bound to: {selKp.BoundBoneName}");
+                if (ImGui.SmallButton("Unbind##unbindkp"))
+                {
+                    selKp.BoundBoneName = null;
+                    AddLog($"[Pose] Unbound keypoint [{selKp.KeypointIndex}] {selKp.KeypointName}");
+                }
             }
             else
             {
-                ImGui.TextColored(new Vector4(1f, 0.5f, 0.3f, 1), "⚠ No bone binding — static position");
-                ImGui.TextWrapped("Drag Position values above to manually place this keypoint.");
+                ImGui.TextColored(new Vector4(1f, 0.5f, 0.3f, 1), "⚠ Unbound — pick a bone below");
             }
+
+            // Bone picker dropdown — get all bones from the skeleton
+            var rootMr = FindFirstMeshRenderer(kpRoot);
+            if (rootMr?.Mesh?.Skeleton != null)
+            {
+                var boneNames = new List<string> { "(none)" };
+                boneNames.AddRange(rootMr.Mesh.Skeleton.BonesByName.Keys);
+
+                int currentBoneIdx = 0;
+                if (!string.IsNullOrEmpty(selKp.BoundBoneName))
+                {
+                    int found = boneNames.IndexOf(selKp.BoundBoneName);
+                    if (found >= 0) currentBoneIdx = found;
+                }
+
+                var boneArray = boneNames.ToArray();
+                if (ImGui.Combo("Bind to Bone", ref currentBoneIdx, boneArray, boneArray.Length))
+                {
+                    if (currentBoneIdx == 0)
+                    {
+                        selKp.BoundBoneName = null;
+                        AddLog($"[Pose] Unbound [{selKp.KeypointIndex}] {selKp.KeypointName}");
+                    }
+                    else
+                    {
+                        selKp.BoundBoneName = boneArray[currentBoneIdx];
+                        AddLog($"[Pose] Bound [{selKp.KeypointIndex}] {selKp.KeypointName} → {selKp.BoundBoneName}");
+                    }
+                }
+            }
+
             if (ImGui.Button("⬆ Back to Parent", new Vector2(-1, 0)))
             {
                 _app.Scene.SelectedObject = kpRoot;
