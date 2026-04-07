@@ -146,6 +146,7 @@ public class Application
 
         _inputManager.Update();
 
+
         // Update ocean
         _ocean.Update(_totalTime);
 

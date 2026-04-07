@@ -61,6 +61,56 @@ public class SceneObject
         var local = Transform.GetMatrix();
         return Parent != null ? local * Parent.GetWorldMatrix() : local;
     }
+    public SceneObject Clone()
+    {
+        var clone = new SceneObject($"{Name} (Copy)");
+        clone.Transform.Position = Transform.Position;
+        clone.Transform.Rotation = Transform.Rotation;
+        clone.Transform.Scale = Transform.Scale;
+        clone.ExcludeFromRandomization = ExcludeFromRandomization;
+        clone.BodyPartGroup = BodyPartGroup;
+
+        // Clone components (shallow copy of members is usually fine for these DTO-like components)
+        foreach (var entry in _components)
+        {
+            var type = entry.Key;
+            var comp = entry.Value;
+
+            // Manual deep-copy logic for specific components that need it
+            if (comp is SynthGen.Scene.Components.LabelComponent lc)
+            {
+                clone.AddComponent(new SynthGen.Scene.Components.LabelComponent
+                {
+                    ClassID = lc.ClassID,
+                    ClassName = lc.ClassName,
+                    SegmentationColor = lc.SegmentationColor
+                });
+            }
+            else
+            {
+                // Simple memberwise clone for basic components
+                var method = comp.GetType().GetMethod("MemberwiseClone", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (method != null)
+                {
+                    clone.AddComponent(method.Invoke(comp, null)!);
+                }
+                else
+                {
+                    // Fallback to just adding the same instance if it's stateless, 
+                    // though most of ours carry state so we should be careful.
+                    clone.AddComponent(comp);
+                }
+            }
+        }
+
+        // Clone children recursively
+        foreach (var child in Children)
+        {
+            clone.AddChild(child.Clone());
+        }
+
+        return clone;
+    }
 }
 
 /// <summary>

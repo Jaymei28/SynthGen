@@ -53,6 +53,9 @@ public class UIManager
     private float _preFocusDistance = -1f; // -1 = not focused
     private const float ToolbarHeight = 48f;
 
+    private SceneObject? _lastDeletedObject; // For simple one-step Undo
+
+
     public UIManager(Application app)
     {
         _app = app;
@@ -123,6 +126,61 @@ public class UIManager
                 }
             }
         }
+
+        // Global Keyboard Shortcuts (only if not typing in a UI field)
+        if (!ImGui.GetIO().WantTextInput)
+        {
+            var sel = _app.Scene.SelectedObject;
+
+            // DELETE
+            if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Delete) && sel != null)
+            {
+                _lastDeletedObject = sel;
+                _app.Scene.RemoveObject(sel);
+                AddLog($"[Scene] Deleted {sel.Name}. Press Ctrl+Z to undo.");
+            }
+
+            // DUPLICATE (Ctrl+D)
+            if (_app.Input.CtrlHeld && _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.D) && sel != null)
+            {
+                var clone = sel.Clone();
+                _app.Scene.AddObject(clone);
+                _app.Scene.SelectedObject = clone;
+                AddLog($"[Scene] Duplicated {sel.Name}");
+            }
+
+            // UNDO (Ctrl+Z) - Simple one-step restore for deleted objects
+            if (_app.Input.CtrlHeld && _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Z))
+            {
+                if (_lastDeletedObject != null && !_app.Scene.Objects.Contains(_lastDeletedObject))
+                {
+                    _app.Scene.AddObject(_lastDeletedObject);
+                    _app.Scene.SelectedObject = _lastDeletedObject;
+                    AddLog($"[Scene] Restored {_lastDeletedObject.Name}");
+                    _lastDeletedObject = null;
+                }
+            }
+
+            // DESELECT (Esc)
+            if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Escape))
+            {
+                _app.Scene.SelectedObject = null;
+            }
+
+            // RANDOMIZE (R) - Dedicated shortcut for fast iteration
+            // (Only triggers if not currently manipulating an object with 'R')
+            if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.R) && !_isManipulating && !_app.Input.CtrlHeld)
+            {
+                var rng = new Random();
+                foreach (var r in _allRandomizers)
+                {
+                    if (r.Enabled || r.Category == "Object") 
+                        r.Randomize(_app.Scene, rng);
+                }
+                AddLog("[UI] Randomized scene.");
+            }
+        }
+
 
         SetupDockspace();
 
