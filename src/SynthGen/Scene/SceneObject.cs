@@ -18,6 +18,9 @@ public class SceneObject
 
     /// <summary>Body part group name for keypoint annotation (e.g., "Head", "Left Arm").</summary>
     public string BodyPartGroup { get; set; } = "";
+
+    /// <summary>Which pose estimation standard this character uses (COCO, Fisheye, etc.)</summary>
+    public Annotation.PoseStandardType PoseStandard { get; set; } = Annotation.PoseStandardType.COCO;
  
     public void AddChild(SceneObject child)
     {

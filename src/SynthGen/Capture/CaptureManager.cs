@@ -90,7 +90,10 @@ public class CaptureManager
         {
             var label = obj.GetComponent<LabelComponent>();
             if (label != null)
-                _cocoExporter.AddCategory(label.ClassID, label.ClassName, ExportKeypointPose);
+            {
+                var std = ExportKeypointPose ? Annotation.KeypointRegistry.GetStandard(obj.PoseStandard) : null;
+                _cocoExporter.AddCategory(label.ClassID, label.ClassName, std);
+            }
         }
 
         // Auto-map bones to keypoints if no mapping exists yet
@@ -280,7 +283,8 @@ public class CaptureManager
 
         var annotations = Annotation.KeypointAnnotator.GenerateKeypoints(
             _scene, view, proj, _renderer.Width, _renderer.Height, 
-            KeypointBoneMap.Count > 0 ? KeypointBoneMap : null);
+            (KeypointBoneMap.Count > 0 ? KeypointBoneMap : null),
+            cam.FisheyeStrength);
 
         if (annotations.Count > 0)
         {
@@ -301,7 +305,7 @@ public class CaptureManager
     }
 
     /// <summary>
-    /// Auto-discovers skeleton bones in the scene and maps them to COCO keypoints.
+    /// Auto-discovers skeleton bones in the scene and maps them to the appropriate keypoint standard.
     /// </summary>
     private void AutoMapKeypointsFromScene()
     {
@@ -310,14 +314,17 @@ public class CaptureManager
             var mr = obj.GetComponent<MeshRendererComponent>();
             if (mr?.Mesh == null || !mr.Mesh.HasSkinning || mr.Mesh.Skeleton == null) continue;
 
-            KeypointBoneMap = Annotation.KeypointRegistry.AutoMapBones(
-                mr.Mesh.Skeleton.BonesByName.Keys);
+            var std = Annotation.KeypointRegistry.GetStandard(obj.PoseStandard);
+            KeypointBoneMap = Annotation.KeypointRegistry.AutoMapBones(std, mr.Mesh.Skeleton.BonesByName.Keys);
             
             if (KeypointBoneMap.Count > 0)
             {
-                OnLog?.Invoke($"[Keypoints] Auto-mapped {KeypointBoneMap.Count}/17 bones to COCO keypoints");
+                OnLog?.Invoke($"[Keypoints] Auto-mapped {KeypointBoneMap.Count}/{std.Keypoints.Count} bones to {std.Name} keypoints");
                 foreach (var kvp in KeypointBoneMap)
-                    OnLog?.Invoke($"  [{kvp.Key}] {Annotation.KeypointRegistry.KeypointNames[kvp.Key]} → {kvp.Value}");
+                {
+                    if (std.Keypoints.TryGetValue(kvp.Key, out var name))
+                        OnLog?.Invoke($"  [{kvp.Key}] {name} → {kvp.Value}");
+                }
                 return;
             }
         }

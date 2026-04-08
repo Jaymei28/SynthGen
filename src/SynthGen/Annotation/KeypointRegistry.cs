@@ -7,110 +7,97 @@ namespace SynthGen.Annotation;
 /// Maps keypoint indices to names and provides default bone name mappings
 /// for common Mixamo/FBX skeletons.
 /// </summary>
+public enum PoseStandardType { COCO, Fisheye }
+
+public class PoseStandard
+{
+    public string Name = "";
+    public Dictionary<int, string> Keypoints = new();
+    public (int, int)[] Edges = System.Array.Empty<(int, int)>();
+    public Dictionary<int, string[]> BonePatterns = new();
+}
+
 public static class KeypointRegistry
 {
-    /// <summary>
-    /// The 17 COCO keypoint names in order (0-indexed).
-    /// </summary>
-    public static readonly string[] KeypointNames =
+    public static readonly PoseStandard COCO = new PoseStandard
     {
-        "Nose",           // 0
-        "Left Eye",       // 1
-        "Right Eye",      // 2
-        "Left Ear",       // 3
-        "Right Ear",      // 4
-        "Left Shoulder",  // 5
-        "Right Shoulder", // 6
-        "Left Elbow",     // 7
-        "Right Elbow",    // 8
-        "Left Wrist",     // 9
-        "Right Wrist",    // 10
-        "Left Hip",       // 11
-        "Right Hip",      // 12
-        "Left Knee",      // 13
-        "Right Knee",     // 14
-        "Left Ankle",     // 15
-        "Right Ankle",    // 16
+        Name = "COCO 17",
+        Keypoints = new Dictionary<int, string>
+        {
+            {0, "Nose"}, {1, "Left Eye"}, {2, "Right Eye"}, {3, "Left Ear"}, {4, "Right Ear"},
+            {5, "Left Shoulder"}, {6, "Right Shoulder"}, {7, "Left Elbow"}, {8, "Right Elbow"},
+            {9, "Left Wrist"}, {10, "Right Wrist"}, {11, "Left Hip"}, {12, "Right Hip"},
+            {13, "Left Knee"}, {14, "Right Knee"}, {15, "Left Ankle"}, {16, "Right Ankle"}
+        },
+        Edges = new[] {
+            (0, 1), (0, 2), (1, 3), (2, 4), (5, 6), (5, 7), (7, 9), (6, 8), (8, 10), 
+            (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)
+        },
+        BonePatterns = new Dictionary<int, string[]>
+        {
+            {0, new[]{"head"}}, {1, new[]{"lefteye"}}, {2, new[]{"righteye"}}, {3, new[]{"leftear"}}, {4, new[]{"rightear"}},
+            {5, new[]{"leftshoulder", "Shoulder_L"}}, {6, new[]{"rightshoulder", "Shoulder_R"}},
+            {7, new[]{"leftforearm", "Elbow_L"}}, {8, new[]{"rightforearm", "Elbow_R"}},
+            {9, new[]{"lefthand", "Hand_L"}}, {10, new[]{"righthand", "Hand_R"}},
+            {11, new[]{"leftupleg", "Thigh_L"}}, {12, new[]{"rightupleg", "Thigh_R"}},
+            {13, new[]{"leftleg", "Shin_L"}}, {14, new[]{"rightleg", "Shin_R"}},
+            {15, new[]{"leftfoot", "Foot_L"}}, {16, new[]{"rightfoot", "Foot_R"}}
+        }
     };
 
-    /// <summary>
-    /// COCO skeleton connectivity for visualization.
-    /// Each pair (a, b) means keypoint a is connected to keypoint b.
-    /// </summary>
-    public static readonly (int, int)[] SkeletonEdges =
+    public static readonly PoseStandard Fisheye = new PoseStandard
     {
-        (0, 1), (0, 2),           // Nose → Eyes
-        (1, 3), (2, 4),           // Eyes → Ears
-        (5, 6),                   // Shoulders
-        (5, 7), (7, 9),           // Left arm
-        (6, 8), (8, 10),          // Right arm
-        (5, 11), (6, 12),         // Torso
-        (11, 12),                 // Hips
-        (11, 13), (13, 15),       // Left leg
-        (12, 14), (14, 16),       // Right leg
+        Name = "Fisheye Custom",
+        Keypoints = new Dictionary<int, string>
+        {
+            {0, "Head"},
+            {1, "Chest"},
+            {2, "Left Shoulder"},
+            {3, "Right Shoulder"},
+            {4, "Left Elbow"},
+            {5, "Right Elbow"},
+            {6, "Left Hand"},
+            {7, "Right Hand"}
+        },
+        Edges = new[] {
+            (0, 1),        // Head to Chest
+            (1, 2), (1, 3), // Chest to Shoulders
+            (2, 4), (4, 6), // Left arm
+            (3, 5), (5, 7)  // Right arm
+        },
+        BonePatterns = new Dictionary<int, string[]>
+        {
+            {0, new[]{"head"}},
+            {1, new[]{"spine02", "Spine02", "Chest", "spine1", "Spine1"}},
+            {2, new[]{"leftshoulder", "Shoulder_L"}},
+            {3, new[]{"rightshoulder", "Shoulder_R"}},
+            {4, new[]{"leftforearm", "Elbow_L"}},
+            {5, new[]{"rightforearm", "Elbow_R"}},
+            {6, new[]{"lefthand", "Hand_L"}},
+            {7, new[]{"righthand", "Hand_R"}}
+        }
     };
 
-    /// <summary>
-    /// Default bone name patterns for auto-mapping Mixamo skeletons.
-    /// Each keypoint maps to an array of possible bone name substrings (case-insensitive).
-    /// The first match wins.
-    /// </summary>
-    public static readonly string[][] DefaultBonePatterns =
+    public static PoseStandard GetStandard(PoseStandardType type) => type switch
     {
-        // 0: Nose
-        new[] { "head", "Head" },
-        // 1: Left Eye
-        new[] { "lefteye", "LeftEye", "eye.l", "Eye_L" },
-        // 2: Right Eye
-        new[] { "righteye", "RightEye", "eye.r", "Eye_R" },
-        // 3: Left Ear
-        new[] { "leftear", "LeftEar", "ear.l" },
-        // 4: Right Ear
-        new[] { "rightear", "RightEar", "ear.r" },
-        // 5: Left Shoulder
-        new[] { "leftshoulder", "LeftShoulder", "shoulder.l", "Shoulder_L", "LeftArm" },
-        // 6: Right Shoulder
-        new[] { "rightshoulder", "RightShoulder", "shoulder.r", "Shoulder_R", "RightArm" },
-        // 7: Left Elbow
-        new[] { "leftforearm", "LeftForeArm", "elbow.l", "Elbow_L", "ForeArm_L" },
-        // 8: Right Elbow
-        new[] { "rightforearm", "RightForeArm", "elbow.r", "Elbow_R", "ForeArm_R" },
-        // 9: Left Wrist
-        new[] { "lefthand", "LeftHand", "wrist.l", "Hand_L" },
-        // 10: Right Wrist
-        new[] { "righthand", "RightHand", "wrist.r", "Hand_R" },
-        // 11: Left Hip
-        new[] { "leftupleg", "LeftUpLeg", "hip.l", "UpLeg_L", "Thigh_L" },
-        // 12: Right Hip
-        new[] { "rightupleg", "RightUpLeg", "hip.r", "UpLeg_R", "Thigh_R" },
-        // 13: Left Knee
-        new[] { "leftleg", "LeftLeg", "knee.l", "Leg_L", "Shin_L" },
-        // 14: Right Knee
-        new[] { "rightleg", "RightLeg", "knee.r", "Leg_R", "Shin_R" },
-        // 15: Left Ankle
-        new[] { "leftfoot", "LeftFoot", "ankle.l", "Foot_L" },
-        // 16: Right Ankle
-        new[] { "rightfoot", "RightFoot", "ankle.r", "Foot_R" },
+        PoseStandardType.Fisheye => Fisheye,
+        _ => COCO
     };
 
-    /// <summary>
-    /// Attempts to auto-map skeleton bone names to COCO keypoint indices.
-    /// Returns a dictionary: keypointIndex → boneName.
-    /// </summary>
-    public static Dictionary<int, string> AutoMapBones(IEnumerable<string> boneNames)
+    public static Dictionary<int, string> AutoMapBones(PoseStandard std, IEnumerable<string> boneNames)
     {
         var mapping = new Dictionary<int, string>();
         var boneList = new List<string>(boneNames);
 
-        for (int kp = 0; kp < 17; kp++)
+        foreach (var kvp in std.BonePatterns)
         {
-            foreach (var pattern in DefaultBonePatterns[kp])
+            int kpIdx = kvp.Key;
+            foreach (var pattern in kvp.Value)
             {
-                string? match = boneList.Find(b =>
-                    b.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0);
+                string? match = boneList.Find(b => b.IndexOf(pattern, System.StringComparison.OrdinalIgnoreCase) >= 0);
                 if (match != null)
                 {
-                    mapping[kp] = match;
+                    mapping[kpIdx] = match;
                     break;
                 }
             }

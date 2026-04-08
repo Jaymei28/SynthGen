@@ -1560,13 +1560,27 @@ public class UIManager
         }
 
 
-        // ── YOLO26 Keypoint Setup ──
+        // ── Pose Keypoint Setup ──
         ImGui.Separator();
-        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), "🦴 YOLO26 Pose Keypoints");
+        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), "🦴 Pose Estimation Standard");
 
         // Always resolve to root parent for keypoint checking
         var kpRoot = sel;
         while (kpRoot.Parent != null) kpRoot = kpRoot.Parent;
+
+        // Standard Picker (Always use the root's standard)
+        string[] standardNames = Enum.GetNames(typeof(Annotation.PoseStandardType));
+        int currentStdIdx = (int)kpRoot.PoseStandard;
+        if (ImGui.Combo("Standard", ref currentStdIdx, standardNames, standardNames.Length))
+        {
+            kpRoot.PoseStandard = (Annotation.PoseStandardType)currentStdIdx;
+            AddLog($"[Pose] Switched '{kpRoot.Name}' to {kpRoot.PoseStandard} standard");
+        }
+
+        var std = Annotation.KeypointRegistry.GetStandard(kpRoot.PoseStandard);
+        ImGui.Spacing();
+        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), $"🦴 {std.Name} Keypoints");
+
         int kpCount = CountKeypointChildren(kpRoot);
 
         // If the selected object IS a keypoint node, show its info + back button
@@ -1630,23 +1644,25 @@ public class UIManager
             ImGui.Spacing();
         }
 
-        ImGui.Text($"Keypoints: {kpCount}/17");
+        ImGui.Text($"Keypoints: {kpCount}/{std.Keypoints.Count}");
 
         if (kpCount == 0)
         {
-            if (ImGui.Button("🦴 Setup 17 Keypoints", new Vector2(-1, 0)))
+            if (ImGui.Button($"🦴 Setup {std.Name}", new Vector2(-1, 0)))
             {
-                SetupKeypointsForObject(sel);
-                AddLog($"[Pose] Created 17 COCO keypoint nodes under {sel.Name}");
+                SetupKeypointsForObject(sel, sel.PoseStandard);
+                AddLog($"[Pose] Created {std.Keypoints.Count} {std.Name} keypoint nodes under {sel.Name}");
             }
-            ImGui.TextWrapped("Creates 17 empty child nodes positioned in a rough T-pose. Select each node to reposition it on the model.");
+            ImGui.TextWrapped($"Creates automated empty child nodes for the {std.Name} standard. Select each node to reposition it on the model.");
         }
         else
         {
-            // Show keypoint status list
-            var kpNames = Annotation.KeypointRegistry.KeypointNames;
-            for (int i = 0; i < 17; i++)
+            // Show keypoint status list based on the active standard
+            var kpNames = std.Keypoints;
+            foreach (var kvp in kpNames)
             {
+                int i = kvp.Key;
+                string name = kvp.Value;
                 var kpNode = FindKeypointChild(kpRoot, i);
                 if (kpNode != null)
                 {
@@ -1656,16 +1672,14 @@ public class UIManager
                     else
                         ImGui.TextColored(new Vector4(0.3f, 1f, 0.5f, 1), "✅");
                     ImGui.SameLine();
-                    if (ImGui.Selectable($"[{i}] {kpNames[i]}##kp{i}", isCurrentlySelected))
+                    if (ImGui.Selectable($"[{i}] {name}##kp{i}", isCurrentlySelected))
                     {
                         _app.Scene.SelectedObject = kpNode;
                     }
                 }
                 else
                 {
-                    ImGui.TextColored(new Vector4(1f, 0.3f, 0.3f, 1), "❌");
-                    ImGui.SameLine();
-                    ImGui.Text($"[{i}] {kpNames[i]} (MISSING)");
+                    ImGui.TextColored(new Vector4(1f, 1f, 1f, 0.3f), $"  [ ] [{i}] {name} (missing)");
                 }
             }
 
@@ -2590,62 +2604,78 @@ public class UIManager
     /// Creates 17 empty child nodes under the given object, each tagged with a KeypointComponent.
     /// Auto-binds to skeleton bones if the model has a skeleton.
     /// </summary>
-    private void SetupKeypointsForObject(SceneObject parent)
+    private void SetupKeypointsForObject(SceneObject parent, Annotation.PoseStandardType type)
     {
-        var kpNames = Annotation.KeypointRegistry.KeypointNames;
-
-        // Try to get bounding box from the model for scaling
-        float h = 1.8f; // default human height
+        var std = Annotation.KeypointRegistry.GetStandard(type);
+        var kpNames = std.Keypoints;
         var mr = FindFirstMeshRenderer(parent);
+        float h = 1.7f;
         if (mr?.Mesh != null)
         {
             h = (mr.Mesh.BoundingBoxMax.Y - mr.Mesh.BoundingBoxMin.Y) * parent.Transform.Scale.Y;
             if (h < 0.1f) h = 1.8f;
         }
 
-        // Try to auto-map bones for binding
+        // Try to auto-map bones for binding using the chosen standard
         Dictionary<int, string>? boneMapping = null;
         if (mr?.Mesh?.Skeleton != null)
         {
-            boneMapping = Annotation.KeypointRegistry.AutoMapBones(mr.Mesh.Skeleton.BonesByName.Keys);
+            boneMapping = Annotation.KeypointRegistry.AutoMapBones(std, mr.Mesh.Skeleton.BonesByName.Keys);
             if (boneMapping.Count > 0)
-                AddLog($"[Pose] Auto-bound {boneMapping.Count}/17 keypoints to skeleton bones");
+                AddLog($"[Pose] Auto-bound {boneMapping.Count}/{std.Keypoints.Count} keypoints to skeleton bones using {std.Name} standard");
         }
 
-        // Rough T-pose offsets (X=left/right, Y=up, Z=forward) relative to parent center
-        var offsets = new Vector3[]
+        foreach (var kvp in std.Keypoints)
         {
-            new(0, h * 0.95f, 0.02f),       // 0: Nose
-            new(0.03f, h * 0.97f, 0.02f),    // 1: Left Eye
-            new(-0.03f, h * 0.97f, 0.02f),   // 2: Right Eye
-            new(0.07f, h * 0.95f, 0f),        // 3: Left Ear
-            new(-0.07f, h * 0.95f, 0f),       // 4: Right Ear
-            new(0.18f, h * 0.82f, 0),         // 5: Left Shoulder
-            new(-0.18f, h * 0.82f, 0),        // 6: Right Shoulder
-            new(0.40f, h * 0.70f, 0),         // 7: Left Elbow
-            new(-0.40f, h * 0.70f, 0),        // 8: Right Elbow
-            new(0.55f, h * 0.60f, 0),         // 9: Left Wrist
-            new(-0.55f, h * 0.60f, 0),        // 10: Right Wrist
-            new(0.10f, h * 0.50f, 0),         // 11: Left Hip
-            new(-0.10f, h * 0.50f, 0),        // 12: Right Hip
-            new(0.10f, h * 0.28f, 0),         // 13: Left Knee
-            new(-0.10f, h * 0.28f, 0),        // 14: Right Knee
-            new(0.10f, h * 0.05f, 0),         // 15: Left Ankle
-            new(-0.10f, h * 0.05f, 0),        // 16: Right Ankle
-        };
+            int i = kvp.Key;
+            string name = kvp.Value;
+            Vector3 offset = Vector3.Zero;
 
-        for (int i = 0; i < 17; i++)
-        {
-            var kpComp = new KeypointComponent(i, kpNames[i]);
-
-            // Auto-bind to skeleton bone if available
-            if (boneMapping != null && boneMapping.TryGetValue(i, out var boneName))
+            // Layout based on standard type
+            if (type == Annotation.PoseStandardType.Fisheye)
             {
-                kpComp.BoundBoneName = boneName;
+                offset = i switch {
+                    0 => new(0, h * 0.93f, 0),        // Head
+                    1 => new(0, h * 0.75f, 0),        // Chest
+                    2 => new(0.18f, h * 0.82f, 0),    // L Shoulder
+                    3 => new(-0.18f, h * 0.82f, 0),   // R Shoulder
+                    4 => new(0.40f, h * 0.70f, 0),    // L Elbow
+                    5 => new(-0.40f, h * 0.70f, 0),   // R Elbow
+                    6 => new(0.55f, h * 0.60f, 0),    // L Hand
+                    7 => new(-0.55f, h * 0.60f, 0),   // R Hand
+                    _ => Vector3.Zero
+                };
+            }
+            else // COCO 17
+            {
+                offset = i switch {
+                    0 => new(0, h * 0.95f, 0.02f),
+                    1 => new(0.03f, h * 0.97f, 0.02f),
+                    2 => new(-0.03f, h * 0.97f, 0.02f),
+                    3 => new(0.07f, h * 0.95f, 0f),
+                    4 => new(-0.07f, h * 0.95f, 0f),
+                    5 => new(0.18f, h * 0.82f, 0),
+                    6 => new(-0.18f, h * 0.82f, 0),
+                    7 => new(0.40f, h * 0.70f, 0),
+                    8 => new(-0.40f, h * 0.70f, 0),
+                    9 => new(0.55f, h * 0.60f, 0),
+                    10 => new(-0.55f, h * 0.60f, 0),
+                    11 => new(0.10f, h * 0.50f, 0),
+                    12 => new(-0.10f, h * 0.50f, 0),
+                    13 => new(0.10f, h * 0.28f, 0),
+                    14 => new(-0.10f, h * 0.28f, 0),
+                    15 => new(0.10f, h * 0.05f, 0),
+                    16 => new(-0.10f, h * 0.05f, 0),
+                    _ => Vector3.Zero
+                };
             }
 
-            var node = new SceneObject($"KP_{i}_{kpNames[i].Replace(" ", "")}");
-            node.Transform.Position = parent.Transform.Position + offsets[i];
+            var kpComp = new KeypointComponent(i, name);
+            if (boneMapping != null && boneMapping.TryGetValue(i, out var boneName))
+                kpComp.BoundBoneName = boneName;
+
+            var node = new SceneObject($"KP_{i}_{name.Replace(" ", "")}");
+            node.Transform.Position = parent.Transform.Position + offset;
             node.AddComponent(kpComp);
             parent.AddChild(node);
             _app.Scene.AddObject(node);
@@ -2708,11 +2738,16 @@ public class UIManager
         float aspect = (float)_app.Renderer.Width / Math.Max(1, _app.Renderer.Height);
         var proj = cam.GetProjectionMatrix(aspect);
 
-        var kpScreenPos = new Vector2?[17];
+
 
         // Project all keypoint world positions to screen
-        for (int i = 0; i < 17; i++)
+        var currentStd = Annotation.KeypointRegistry.GetStandard(root.PoseStandard);
+        var kpScreenPos = new Dictionary<int, Vector2>();
+
+        // Project all keypoint world positions to screen
+        foreach (var kvp in currentStd.Keypoints)
         {
+            int i = kvp.Key;
             var kpNode = FindKeypointChild(root, i);
             if (kpNode == null) continue;
 
@@ -2725,45 +2760,63 @@ public class UIManager
             float sx = (ndcX + 1) * 0.5f * _viewportSize.X;
             float sy = (1 - ndcY) * 0.5f * _viewportSize.Y;
 
+            // Apply Fisheye Warp for UI overlay
+            if (MathF.Abs(cam.FisheyeStrength) > 0.001f)
+            {
+                var warped = Annotation.KeypointAnnotator.WarpFisheye(new Vector2(sx, sy), (int)_viewportSize.X, (int)_viewportSize.Y, cam.FisheyeStrength);
+                sx = warped.X;
+                sy = warped.Y;
+            }
+
             if (sx >= -50 && sx < _viewportSize.X + 50 && sy >= -50 && sy < _viewportSize.Y + 50)
                 kpScreenPos[i] = _viewportScreenPos + new Vector2(sx, sy);
         }
 
         var drawList = ImGui.GetWindowDrawList();
 
-        // Draw skeleton edges
-        var edges = Annotation.KeypointRegistry.SkeletonEdges;
+        var std = Annotation.KeypointRegistry.GetStandard(root.PoseStandard);
+        var edges = std.Edges;
         foreach (var (a, b) in edges)
         {
-            if (kpScreenPos[a].HasValue && kpScreenPos[b].HasValue)
+            if (kpScreenPos.TryGetValue(a, out var posA) && kpScreenPos.TryGetValue(b, out var posB))
             {
-                // Color by body region
                 uint lineColor;
-                if (a <= 4 || b <= 4) lineColor = ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 0.8f)); // Face = green
-                else if (a >= 11 || b >= 11) lineColor = ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 0.8f)); // Legs = pink
-                else lineColor = ImGui.GetColorU32(new Vector4(0.3f, 0.7f, 1f, 0.8f)); // Arms/torso = blue
-
-                drawList.AddLine(kpScreenPos[a]!.Value, kpScreenPos[b]!.Value, lineColor, 2f);
+                if (root.PoseStandard == Annotation.PoseStandardType.Fisheye)
+                {
+                    lineColor = (a == 0 || b == 0) ? ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 0.8f)) : ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 0.8f));
+                }
+                else
+                {
+                    if (a <= 4 || b <= 4) lineColor = ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 0.8f));
+                    else if (a >= 11 || b >= 11) lineColor = ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 0.8f));
+                    else lineColor = ImGui.GetColorU32(new Vector4(0.3f, 0.7f, 1f, 0.8f));
+                }
+                drawList.AddLine(posA, posB, lineColor, 2f);
             }
         }
 
-        // Draw keypoint circles
-        for (int i = 0; i < 17; i++)
+        // Project all keypoint circles
+        foreach (var kvp in std.Keypoints)
         {
-            if (!kpScreenPos[i].HasValue) continue;
-            var pos = kpScreenPos[i]!.Value;
+            int i = kvp.Key;
+            string name = kvp.Value;
+            if (!kpScreenPos.TryGetValue(i, out var pos)) continue;
             
             uint circleColor;
-            if (i <= 4) circleColor = ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 1f)); // Face
-            else if (i >= 11) circleColor = ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 1f)); // Legs
-            else circleColor = ImGui.GetColorU32(new Vector4(0.3f, 0.7f, 1f, 1f)); // Arms
+            if (root.PoseStandard == Annotation.PoseStandardType.Fisheye)
+            {
+                circleColor = (i == 0) ? ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 1f)) : ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 1f));
+            }
+            else
+            {
+                if (i <= 4) circleColor = ImGui.GetColorU32(new Vector4(0.2f, 1f, 0.2f, 1f)); // Face
+                else if (i >= 11) circleColor = ImGui.GetColorU32(new Vector4(1f, 0.3f, 0.8f, 1f)); // Legs
+                else circleColor = ImGui.GetColorU32(new Vector4(0.3f, 0.7f, 1f, 1f)); // Arms
+            }
 
             drawList.AddCircleFilled(pos, 5f, circleColor);
             drawList.AddCircle(pos, 5f, ImGui.GetColorU32(new Vector4(1, 1, 1, 0.8f)), 12, 1.5f);
-            
-            // Label
-            drawList.AddText(pos + new Vector2(8, -6), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.9f)),
-                $"{i}");
+            drawList.AddText(pos + new Vector2(8, -8), circleColor, $"{i}: {name}");
         }
     }
     private static (SceneObject?, MeshRendererComponent?) FindSkinnedMeshInHierarchy(SceneObject obj)

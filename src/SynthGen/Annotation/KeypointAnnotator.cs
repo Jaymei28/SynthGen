@@ -28,32 +28,29 @@ public class KeypointAnnotation
     public int ClassID;
     public int InstanceID;
     public string ClassName = "";
-    /// <summary>17 keypoints in COCO order.</summary>
-    public Keypoint2D[] Keypoints = new Keypoint2D[17];
+    
+    /// <summary>Keypoint data mapped by index.</summary>
+    public Dictionary<int, Keypoint2D> Keypoints = new();
+    
     /// <summary>Number of visible keypoints.</summary>
     public int NumKeypoints;
     /// <summary>Bounding box [x, y, w, h] enclosing all visible keypoints.</summary>
     public float[] BBox = new float[4];
+
+    /// <summary>The standard used for this annotation (passed along to exporters).</summary>
+    public PoseStandard Standard { get; set; } = KeypointRegistry.COCO;
 }
 
-/// <summary>
-/// Projects 3D skeleton bone positions to 2D keypoints for pose estimation annotation.
-/// Uses the EXACT same bone-to-screen math as UIManager.DrawOriented3DBox:
-///   finalBoneMatrix * objectWorldMatrix → then project through view * proj.
-/// </summary>
 public static class KeypointAnnotator
 {
-    /// <summary>
-    /// Generates keypoint annotations for all characters in the scene.
-    /// Only produces ONE annotation per root-level character.
-    /// </summary>
     public static List<KeypointAnnotation> GenerateKeypoints(
         SceneGraph scene,
         Matrix4x4 viewMatrix,
         Matrix4x4 projMatrix,
         int imageWidth,
         int imageHeight,
-        Dictionary<int, string>? keypointBoneMap = null)
+        Dictionary<int, string>? keypointBoneMap = null,
+        float fisheyeStrength = 0)
     {
         var results = new List<KeypointAnnotation>();
         var vp = viewMatrix * projMatrix;
@@ -62,11 +59,13 @@ public static class KeypointAnnotator
         {
             if (rootObj.Parent != null) continue;
 
+            var std = KeypointRegistry.GetStandard(rootObj.PoseStandard);
+
             // ── Path 1: Node-based keypoints (KeypointComponent nodes) ──
             var nodeKeypoints = CollectKeypointNodes(rootObj);
             if (nodeKeypoints.Count > 0)
             {
-                var annotation = new KeypointAnnotation();
+                var annotation = new KeypointAnnotation { Standard = std };
                 var label = FindLabel(rootObj);
                 if (label != null)
                 {
@@ -79,11 +78,11 @@ public static class KeypointAnnotator
                 float minX = float.MaxValue, minY = float.MaxValue;
                 float maxX = float.MinValue, maxY = float.MinValue;
 
-                for (int kp = 0; kp < 17; kp++)
+                foreach (var kpIdx in std.Keypoints.Keys)
                 {
-                    if (!nodeKeypoints.TryGetValue(kp, out var kpNode))
+                    if (!nodeKeypoints.TryGetValue(kpIdx, out var kpNode))
                     {
-                        annotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                        annotation.Keypoints[kpIdx] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                         continue;
                     }
 
@@ -91,7 +90,7 @@ public static class KeypointAnnotator
                     var clip = Vector4.Transform(new Vector4(worldPos, 1.0f), vp);
                     if (clip.W <= 0)
                     {
-                        annotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                        annotation.Keypoints[kpIdx] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                         continue;
                     }
 
@@ -100,8 +99,16 @@ public static class KeypointAnnotator
                     float sx = (ndcX + 1) * 0.5f * imageWidth;
                     float sy = (1 - ndcY) * 0.5f * imageHeight;
 
+                    // Apply Fisheye Warp if active
+                    if (MathF.Abs(fisheyeStrength) > 0.001f)
+                    {
+                        var warped = WarpFisheye(new Vector2(sx, sy), imageWidth, imageHeight, fisheyeStrength);
+                        sx = warped.X;
+                        sy = warped.Y;
+                    }
+
                     bool inBounds = sx >= 0 && sx < imageWidth && sy >= 0 && sy < imageHeight;
-                    annotation.Keypoints[kp] = new Keypoint2D
+                    annotation.Keypoints[kpIdx] = new Keypoint2D
                     {
                         X = sx,
                         Y = sy,
@@ -131,16 +138,14 @@ public static class KeypointAnnotator
                     };
                     results.Add(annotation);
                 }
-                continue; // Skip bone-based path for this object
+                continue; 
             }
 
             // ── Path 2: Bone-based keypoints (skeleton armature) ──
             var (skinnedObj, mr) = FindFirstSkinnedMesh(rootObj);
-            if (skinnedObj == null || mr?.Mesh == null) continue;
+            if (skinnedObj == null || mr?.Mesh == null || mr.Mesh.Skeleton == null) continue;
 
             var skeleton = mr.Mesh.Skeleton;
-            if (skeleton == null) continue;
-
             var anim = skinnedObj.GetComponent<AnimationPlayerComponent>();
             if (anim != null && mr.Mesh.Clips.Count > 0)
             {
@@ -151,10 +156,9 @@ public static class KeypointAnnotator
             var finalBoneMatrices = skeleton.GetFinalMatrices();
             var objectWorldMatrix = skinnedObj.GetWorldMatrix();
 
-            var mapping = keypointBoneMap ?? KeypointRegistry.AutoMapBones(
-                skeleton.BonesByName.Keys);
+            var mapping = keypointBoneMap ?? KeypointRegistry.AutoMapBones(std, skeleton.BonesByName.Keys);
 
-            var boneAnnotation = new KeypointAnnotation();
+            var boneAnnotation = new KeypointAnnotation { Standard = std };
             var boneLabel = FindLabel(rootObj);
             if (boneLabel != null)
             {
@@ -167,19 +171,19 @@ public static class KeypointAnnotator
             float bMinX = float.MaxValue, bMinY = float.MaxValue;
             float bMaxX = float.MinValue, bMaxY = float.MinValue;
 
-            for (int kp = 0; kp < 17; kp++)
+            foreach (var kpIdx in std.Keypoints.Keys)
             {
-                if (!mapping.TryGetValue(kp, out var boneName) ||
+                if (!mapping.TryGetValue(kpIdx, out var boneName) ||
                     !skeleton.BonesByName.TryGetValue(boneName, out var bone))
                 {
-                    boneAnnotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                    boneAnnotation.Keypoints[kpIdx] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                     continue;
                 }
 
                 int boneIdx = bone.ID;
                 if (boneIdx < 0 || boneIdx >= finalBoneMatrices.Length)
                 {
-                    boneAnnotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                    boneAnnotation.Keypoints[kpIdx] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                     continue;
                 }
 
@@ -189,7 +193,7 @@ public static class KeypointAnnotator
                 var clip2 = Vector4.Transform(new Vector4(jointWorldPos, 1.0f), vp);
                 if (clip2.W <= 0)
                 {
-                    boneAnnotation.Keypoints[kp] = new Keypoint2D { X = 0, Y = 0, V = 0 };
+                    boneAnnotation.Keypoints[kpIdx] = new Keypoint2D { X = 0, Y = 0, V = 0 };
                     continue;
                 }
 
@@ -198,8 +202,16 @@ public static class KeypointAnnotator
                 float sx = (ndcX + 1) * 0.5f * imageWidth;
                 float sy = (1 - ndcY) * 0.5f * imageHeight;
 
+                // Apply Fisheye Warp if active
+                if (MathF.Abs(fisheyeStrength) > 0.001f)
+                {
+                    var warped = WarpFisheye(new Vector2(sx, sy), imageWidth, imageHeight, fisheyeStrength);
+                    sx = warped.X;
+                    sy = warped.Y;
+                }
+
                 bool inBounds = sx >= 0 && sx < imageWidth && sy >= 0 && sy < imageHeight;
-                boneAnnotation.Keypoints[kp] = new Keypoint2D
+                boneAnnotation.Keypoints[kpIdx] = new Keypoint2D
                 {
                     X = sx,
                     Y = sy,
@@ -235,8 +247,38 @@ public static class KeypointAnnotator
     }
 
     /// <summary>
-    /// Collects all KeypointComponent nodes from a hierarchy into a dictionary by index.
+    /// Applies the INVERSE of the shader's lens distortion to keypoint coordinates.
+    /// This keeps annotation points pinned to the character's visuals during fish-eye.
     /// </summary>
+    public static Vector2 WarpFisheye(Vector2 screenPos, int width, int height, float strength)
+    {
+        if (MathF.Abs(strength) < 0.001f) return screenPos;
+        
+        // Normalize to [-0.5, 0.5] range relative to center (exactly matching shader vUV - 0.5)
+        Vector2 center = new Vector2(width * 0.5f, height * 0.5f);
+        Vector2 dist = (screenPos - center);
+        dist.X /= width;
+        dist.Y /= height;
+        
+        float d = dist.Length();
+        if (d < 0.001f) return screenPos;
+
+        // Solution for v: strength*v^3 + v - (d * cornerDistortion) = 0
+        float cornerDistortion = 1.0f + 0.5f * strength;
+        float sTarget = d * cornerDistortion;
+        
+        float v = d; 
+        for (int i = 0; i < 5; i++)
+        {
+            float f = strength * v * v * v + v - sTarget;
+            float df = 3.0f * strength * v * v + 1.0f;
+            v -= f / df;
+        }
+
+        Vector2 warpedDist = Vector2.Normalize(dist) * v;
+        return center + new Vector2(warpedDist.X * width, warpedDist.Y * height);
+    }
+
     private static Dictionary<int, SceneObject> CollectKeypointNodes(SceneObject obj)
     {
         var result = new Dictionary<int, SceneObject>();
@@ -246,8 +288,8 @@ public static class KeypointAnnotator
 
     private static void CollectKeypointNodesRecursive(SceneObject obj, Dictionary<int, SceneObject> result)
     {
-        var kp = obj.GetComponent<Scene.Components.KeypointComponent>();
-        if (kp != null && kp.KeypointIndex >= 0 && kp.KeypointIndex < 17)
+        var kp = obj.GetComponent<KeypointComponent>();
+        if (kp != null && kp.KeypointIndex >= 0)
         {
             result[kp.KeypointIndex] = obj;
         }
@@ -282,3 +324,4 @@ public static class KeypointAnnotator
         return null;
     }
 }
+

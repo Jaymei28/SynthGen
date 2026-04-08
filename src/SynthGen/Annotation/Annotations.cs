@@ -98,6 +98,10 @@ public static class YOLOExporter
 /// Exports annotations in YOLOv8-Pose format.
 /// Format: class_id cx cy w h kp1_x kp1_y kp1_v kp2_x kp2_y kp2_v ... kp17_x kp17_y kp17_v
 /// </summary>
+/// <summary>
+/// Exports annotations in YOLOv8-Pose format.
+/// Format: class_id cx cy w h kp1_x kp1_y kp1_v kp2_x kp2_y kp2_v ...
+/// </summary>
 public static class YOLOPoseExporter
 {
     public static void ExportFrame(string outputPath, List<KeypointAnnotation> annotations, int imgWidth, int imgHeight)
@@ -105,7 +109,6 @@ public static class YOLOPoseExporter
         using var writer = new StreamWriter(outputPath);
         foreach (var ann in annotations)
         {
-            // Bounding box in YOLO format (normalized center x, center y, width, height)
             float cx = (ann.BBox[0] + ann.BBox[2] / 2f) / imgWidth;
             float cy = (ann.BBox[1] + ann.BBox[3] / 2f) / imgHeight;
             float w = ann.BBox[2] / imgWidth;
@@ -113,13 +116,19 @@ public static class YOLOPoseExporter
 
             var parts = new List<string> { $"{ann.ClassID} {cx:F6} {cy:F6} {w:F6} {h:F6}" };
 
-            // 17 keypoints: x y visibility (normalized)
-            for (int i = 0; i < 17; i++)
+            // Export keypoints in standard order
+            foreach (var kpIdx in ann.Standard.Keypoints.Keys)
             {
-                var kp = ann.Keypoints[i];
-                float kx = kp.V > 0 ? kp.X / imgWidth : 0f;
-                float ky = kp.V > 0 ? kp.Y / imgHeight : 0f;
-                parts.Add($"{kx:F6} {ky:F6} {kp.V}");
+                if (ann.Keypoints.TryGetValue(kpIdx, out var kp))
+                {
+                    float kx = kp.V > 0 ? kp.X / imgWidth : 0f;
+                    float ky = kp.V > 0 ? kp.Y / imgHeight : 0f;
+                    parts.Add($"{kx:F6} {ky:F6} {kp.V}");
+                }
+                else
+                {
+                    parts.Add("0.000000 0.000000 0");
+                }
             }
 
             writer.WriteLine(string.Join(" ", parts));
@@ -135,28 +144,24 @@ public class COCOExporter
     private readonly COCODataset _dataset = new();
     private int _annotationId = 1;
 
-    public void AddCategory(int id, string name, bool withKeypoints = false)
+    public void AddCategory(int id, string name, PoseStandard? standard = null)
     {
         if (_dataset.Categories.Any(c => c.Id == id)) return;
         var cat = new COCOCategory { Id = id, Name = name };
-        if (withKeypoints)
+        if (standard != null)
         {
-            cat.Keypoints = KeypointRegistry.KeypointNames.ToList();
-            cat.Skeleton = KeypointRegistry.SkeletonEdges
-                .Select(e => new[] { e.Item1, e.Item2 }).ToList();
+            cat.Keypoints = standard.Keypoints.Values.ToList();
+            cat.Skeleton = standard.Edges.Select(e => new[] { e.Item1, e.Item2 }).ToList();
         }
         _dataset.Categories.Add(cat);
     }
 
     public void AddFrame(int frameId, string fileName, int width, int height, List<BBox2D> bboxes)
     {
-        _dataset.Images.Add(new COCOImage
+        if (!_dataset.Images.Any(i => i.Id == frameId))
         {
-            Id = frameId,
-            FileName = fileName,
-            Width = width,
-            Height = height
-        });
+            _dataset.Images.Add(new COCOImage { Id = frameId, FileName = fileName, Width = width, Height = height });
+        }
 
         foreach (var b in bboxes)
         {
@@ -172,32 +177,28 @@ public class COCOExporter
         }
     }
 
-    /// <summary>
-    /// Adds keypoint annotations for a frame.
-    /// </summary>
     public void AddKeypointFrame(int frameId, string fileName, int width, int height, List<KeypointAnnotation> annotations)
     {
-        // Add image if not already added
         if (!_dataset.Images.Any(i => i.Id == frameId))
         {
-            _dataset.Images.Add(new COCOImage
-            {
-                Id = frameId,
-                FileName = fileName,
-                Width = width,
-                Height = height
-            });
+            _dataset.Images.Add(new COCOImage { Id = frameId, FileName = fileName, Width = width, Height = height });
         }
 
         foreach (var ann in annotations)
         {
-            // Flatten keypoints: [x1, y1, v1, x2, y2, v2, ...]
             var kpList = new List<float>();
-            for (int i = 0; i < 17; i++)
+            foreach (var kpIdx in ann.Standard.Keypoints.Keys)
             {
-                kpList.Add(ann.Keypoints[i].X);
-                kpList.Add(ann.Keypoints[i].Y);
-                kpList.Add(ann.Keypoints[i].V);
+                if (ann.Keypoints.TryGetValue(kpIdx, out var kp))
+                {
+                    kpList.Add(kp.X);
+                    kpList.Add(kp.Y);
+                    kpList.Add((float)kp.V);
+                }
+                else
+                {
+                    kpList.Add(0); kpList.Add(0); kpList.Add(0);
+                }
             }
 
             _dataset.Annotations.Add(new COCOAnnotation
