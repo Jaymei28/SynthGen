@@ -42,6 +42,7 @@ public class UIManager
     private Vector3 _initialTransformValue; // Initial Pos, Rot, or Scale
     private Vector2 _initialMousePos;
     private bool _startedByMouse = false;
+    private Vector3 _initialBoneOffset; // Backup for undoing keypoint moves
 
     // Gizmo state
     private char _hoveredAxis = '\0';
@@ -748,7 +749,37 @@ public class UIManager
                 if (_axisLock == 'X') move = new Vector3(mouseDelta.X * moveSense, 0, 0);
                 if (_axisLock == 'Y') move = new Vector3(0, -mouseDelta.Y * moveSense, 0);
                 if (_axisLock == 'Z') move = new Vector3(0, 0, -mouseDelta.Y * moveSense);
-                sel.Transform.Position = _initialTransformValue + move;
+                
+                var kp = sel.GetComponent<KeypointComponent>();
+                if (kp != null && !string.IsNullOrEmpty(kp.BoundBoneName))
+                {
+                    // If bound to a bone, we update the BoneOffset instead of world position
+                    // We need the bone's current world-ish matrix
+                    var kpRoot = sel.Parent;
+                    while (kpRoot != null && kpRoot.Parent != null) kpRoot = kpRoot.Parent;
+                    if (kpRoot != null)
+                    {
+                        var (skinnedObj, mr) = FindSkinnedMeshInHierarchy(kpRoot);
+                        if (mr?.Mesh?.Skeleton != null && mr.Mesh.Skeleton.BonesByName.TryGetValue(kp.BoundBoneName, out var bone))
+                        {
+                            var modelObj = skinnedObj ?? kpRoot;
+                            var boneInModel = bone.GlobalTransform * mr.Mesh.Skeleton.GlobalInverseTransform;
+                            var objectWorldMatrix = modelObj.GetWorldMatrix();
+                            var jointWorld = boneInModel * objectWorldMatrix;
+                            
+                            // Convert world-space movement into bone-local space
+                            Matrix4x4.Invert(jointWorld, out var invJointWorld);
+                            invJointWorld.M41 = invJointWorld.M42 = invJointWorld.M43 = 0; // Ignore translation for DELTA move
+                            
+                            Vector3 localMove = Vector3.Transform(move, invJointWorld);
+                            kp.BoneOffset = _initialBoneOffset + localMove;
+                        }
+                    }
+                }
+                else
+                {
+                    sel.Transform.Position = _initialTransformValue + move;
+                }
             }
             else if (_manipMode == ManipulationMode.Rotate)
             {
@@ -822,6 +853,7 @@ public class UIManager
             }
         }
     }
+    public bool IsUsingGizmo() => _isManipulating;
 
     private void DrawViewGizmo()
     {
@@ -1221,7 +1253,12 @@ public class UIManager
         _manipMode = mode;
         _initialMousePos = ImGui.GetIO().MousePos;
         // Keep _axisLock if set by gizmo
-        if (mode == ManipulationMode.Move) _initialTransformValue = obj.Transform.Position;
+        if (mode == ManipulationMode.Move) 
+        {
+            _initialTransformValue = obj.Transform.Position;
+            var kp = obj.GetComponent<KeypointComponent>();
+            if (kp != null) _initialBoneOffset = kp.BoneOffset;
+        }
         if (mode == ManipulationMode.Rotate) _initialTransformValue = obj.Transform.Rotation;
         if (mode == ManipulationMode.Scale) _initialTransformValue = obj.Transform.Scale;
     }
@@ -1230,7 +1267,12 @@ public class UIManager
     {
         if (obj != null)
         {
-            if (_manipMode == ManipulationMode.Move) obj.Transform.Position = _initialTransformValue;
+            if (_manipMode == ManipulationMode.Move) 
+            {
+                obj.Transform.Position = _initialTransformValue;
+                var kp = obj.GetComponent<KeypointComponent>();
+                if (kp != null) kp.BoneOffset = _initialBoneOffset;
+            }
             if (_manipMode == ManipulationMode.Rotate) obj.Transform.Rotation = _initialTransformValue;
             if (_manipMode == ManipulationMode.Scale) obj.Transform.Scale = _initialTransformValue;
         }
@@ -1341,13 +1383,9 @@ public class UIManager
                     uint texId = _app.AssetManager.LoadTexture(destPath);
                     if (texId > 0)
                     {
-                        // Find the topmost root of this object's hierarchy
-                        var rootObj = sel;
-                        while (rootObj.Parent != null) rootObj = rootObj.Parent;
-
-                        // Apply to the root and all its descendants
-                        ApplyTextureRecursive(rootObj, texId, destPath, isAlbedo: true);
-                        AddLog($"[Material] Applied Albedo to {rootObj.Name} (Root) + all children: {fileName}");
+                        // Apply ONLY to the selected object and its descendants
+                        ApplyTextureRecursive(sel, texId, destPath, isAlbedo: true);
+                        AddLog($"[Material] Applied Albedo to {sel.Name} + children: {fileName}");
                     }
                 }
             }
@@ -1369,13 +1407,9 @@ public class UIManager
                     uint texId = _app.AssetManager.LoadTexture(destPath);
                     if (texId > 0)
                     {
-                        // Find the topmost root of this object's hierarchy
-                        var rootObj = sel;
-                        while (rootObj.Parent != null) rootObj = rootObj.Parent;
-
-                        // Apply to the root and all its descendants
-                        ApplyTextureRecursive(rootObj, texId, destPath, isAlbedo: false);
-                        AddLog($"[Material] Applied Normal to {rootObj.Name} (Root) + all children: {fileName}");
+                        // Apply ONLY to the selected object and its descendants
+                        ApplyTextureRecursive(sel, texId, destPath, isAlbedo: false);
+                        AddLog($"[Material] Applied Normal to {sel.Name} + children: {fileName}");
                     }
                 }
             }
@@ -1579,7 +1613,12 @@ public class UIManager
                     else
                     {
                         selKp.BoundBoneName = boneArray[currentBoneIdx];
-                        AddLog($"[Pose] Bound [{selKp.KeypointIndex}] {selKp.KeypointName} → {selKp.BoundBoneName}");
+                        
+                        // SNAP TO BONE: Clear any manual offset so it jumps exactly to the bone center.
+                        // You can still fine-tune it with the move tool afterwards.
+                        selKp.BoneOffset = Vector3.Zero;
+
+                        AddLog($"[Pose] Bound [{selKp.KeypointIndex}] {selKp.KeypointName} → {selKp.BoundBoneName} (Snapped to bone origin)");
                     }
                 }
             }
@@ -2726,5 +2765,16 @@ public class UIManager
             drawList.AddText(pos + new Vector2(8, -6), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.9f)),
                 $"{i}");
         }
+    }
+    private static (SceneObject?, MeshRendererComponent?) FindSkinnedMeshInHierarchy(SceneObject obj)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr != null && mr.Mesh != null && mr.Mesh.Skeleton != null) return (obj, mr);
+        foreach (var child in obj.Children)
+        {
+            var result = FindSkinnedMeshInHierarchy(child);
+            if (result.Item1 != null) return result;
+        }
+        return (null, null);
     }
 }

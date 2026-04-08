@@ -274,9 +274,10 @@ public class Application
             var boneInModel = bone.GlobalTransform * skeleton.GlobalInverseTransform;
             var objectWorldMatrix = skinnedObj.GetWorldMatrix();
             var jointWorld = boneInModel * objectWorldMatrix;
-            var worldPos = jointWorld.Translation + kp.BoneOffset;
 
-            obj.Transform.Position = worldPos;
+            // Always keep the keypoint locked to the bone using its local offset.
+            // (We handle manual movement by updating the BoneOffset itself in UIManager)
+            obj.Transform.Position = Vector3.Transform(kp.BoneOffset, jointWorld);
         }
     }
 

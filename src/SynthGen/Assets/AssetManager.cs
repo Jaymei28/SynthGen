@@ -847,10 +847,13 @@ public class AssetManager
                     return 0;
                 }
             } else {
-                using var img = Image.Load<Rgba32>(path);
-                var pixels = new byte[img.Width * img.Height * 4];
-                img.CopyPixelDataTo(pixels);
-                fixed (byte* ptr = pixels) _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)img.Width, (uint)img.Height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, ptr);
+                // Use StbImageSharp for standard textures - much more reliable for OpenGL RGB order
+                using var stream = File.OpenRead(path);
+                var img = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
+                fixed (byte* ptr = img.Data) 
+                {
+                    _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)img.Width, (uint)img.Height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, ptr);
+                }
             }
             _gl.GenerateMipmap(TextureTarget.Texture2D);
             _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
