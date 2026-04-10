@@ -257,96 +257,43 @@ void main() {
     // === Ocean Shaders =======================================================
     public const string OCEAN_VERT = @"
 #version 450 core
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aUV;
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aUV;
 
+uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform float uTime;
-uniform vec3  uCameraPos;
-
-// Skunkworks Wave Params
-uniform float uLevel;
-uniform float uWindSpeed;
-uniform float uWindDirection;
-uniform float uStormIntensity;
-uniform float uSteepness;
-uniform float uChaos;
-uniform float uTimeMultiplier;
+uniform sampler2DArray uDisplacementMap;
+uniform sampler2DArray uNormalMap;
 
 out vec3 vWorldPos;
-out vec3 vNormal;
 out vec2 vUV;
+out float vFoam;
 out float vHeight;
+out vec3 vViewDir;
 
-    const vec4 WAVES[8] = vec4[](
-        vec4(1.0,  0.0,  0.4,  60.0),
-        vec4(0.3,  0.9,  0.3,  31.0),
-        vec4(-0.4, 0.7,  0.25, 17.5),
-        vec4(0.6,  -0.6, 0.2,  12.3),
-        vec4(-0.8, -0.2, 0.15, 7.3),
-        vec4(0.2,  0.8,  0.12, 4.2),
-        vec4(0.5,  0.5,  0.1,  2.7),
-        vec4(-0.1, 0.9,  0.08, 1.5)
-    );
-    const float SPEEDS[8] = float[](1.1, 1.5, 1.9, 2.2, 2.5, 2.8, 3.2, 3.5);
-
-    void main() {
-        float angle = uWindDirection * 3.14159 / 180.0;
-        float cosA = cos(angle);
-        float sinA = sin(angle);
-        float baseAmp = (uWindSpeed / 10.0) * (1.0 + uStormIntensity * 1.5);
-
-        vec3 pos = aPos;
-        vec3 displacement = vec3(0.0, uLevel, 0.0);
-        vec3 tangent = vec3(1.0, 0.0, 0.0);
-        vec3 binormal = vec3(0.0, 0.0, 1.0);
-
-        for (int i = 0; i < 8; i++) {
-            vec4 w = WAVES[i];
-            
-            // Direction rotation
-            float dx = w.x * cosA - w.y * sinA;
-            float dz = w.x * sinA + w.y * cosA;
-            
-            // Deterministic Chaos (more sensitive)
-            float chaosVal = (fract(sin(float(i) * 785.1)) - 0.5) * uChaos;
-            dx += chaosVal;
-            dz += chaosVal;
-            
-            vec2 dir = normalize(vec2(dx, dz));
-            float k = 6.28318 / w.w;
-            float a = (w.w / 120.0) * baseAmp; // Significantly reduced amplitude for rounding
-            float s_i = uSteepness * (w.w / 80.0); // Balanced steepness for organic feel
-            
-            float phase = k * (dot(dir, pos.xz) - SPEEDS[i] * uTime * uTimeMultiplier);
-            float c = cos(phase);
-            float s = sin(phase);
-            
-            displacement.y += a * s;
-            displacement.x += s_i * a * dir.x * c;
-            displacement.z += s_i * a * dir.y * c;
-            
-            float wa = k * a;
-            tangent.y += dir.x * wa * c;
-            tangent.x -= dir.x * dir.x * s_i * wa * s;
-            tangent.z -= dir.x * dir.y * s_i * wa * s;
-
-            binormal.y += dir.y * wa * c;
-            binormal.x -= dir.x * dir.y * s_i * wa * s;
-            binormal.z -= dir.y * dir.y * s_i * wa * s;
-        }
-        
-        pos += displacement;
-        vWorldPos = pos;
-        vNormal = normalize(cross(binormal, tangent));
-        vUV = aUV;
-        vHeight = displacement.y - uLevel;
-
-        gl_Position = uProjection * uView * vec4(pos, 1.0);
-    }
-    ";
+void main() {
+    float gridScale = 0.05; // Matches the tile size logic
+    vec2 worldUV = (uModel * vec4(aPos, 1.0)).xz * gridScale; 
+    
+    // Sample FFT Displacement (Cascade 0)
+    vec4 disp = texture(uDisplacementMap, vec3(worldUV, 0.0));
+    vec3 displacedPos = aPos + disp.xyz;
+    
+    vec4 worldPos = uModel * vec4(displacedPos, 1.0);
+    vWorldPos = worldPos.xyz;
+    vUV = aUV;
+    
+    // Sample Normal Map for foam info
+    vec4 normData = texture(uNormalMap, vec3(worldUV, 0.0));
+    vFoam = normData.a;
+    vHeight = disp.y;
+    
+    gl_Position = uProjection * uView * worldPos;
+    vViewDir = normalize(vec3(inverse(uView)[3]) - worldPos.xyz);
+}
+";
 
     public const string OCEAN_DEPTH_VERT = @"
 #version 450 core
@@ -354,45 +301,14 @@ layout(location = 0) in vec3 aPos;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform float uTime;
-uniform float uLevel;
 uniform float uWindSpeed;
 uniform float uWindDirection;
-uniform float uStormIntensity;
-uniform float uSteepness;
-uniform float uChaos;
 uniform float uTimeMultiplier;
 
 out float vDepth;
 
-const vec4 WAVES[8] = vec4[](
-    vec4(1.0,  0.0,  0.4,  60.0),
-    vec4(0.3,  0.9,  0.3,  31.0),
-    vec4(-0.4, 0.7,  0.25, 17.5),
-    vec4(0.6,  -0.6, 0.2,  12.3),
-    vec4(-0.8, -0.2, 0.15, 7.3),
-    vec4(0.2,  0.8,  0.12, 4.2),
-    vec4(0.5,  0.5,  0.1,  2.7),
-    vec4(-0.1, 0.9,  0.08, 1.5)
-);
-const float SPEEDS[8] = float[](1.1, 1.5, 1.9, 2.2, 2.5, 2.8, 3.2, 3.5);
-
 void main() {
-    float angle = uWindDirection * 3.14159 / 180.0;
-    float cosA = cos(angle); float sinA = sin(angle);
-    float baseAmp = (uWindSpeed / 10.0) * (1.0 + uStormIntensity * 1.5);
-    vec3 pos = aPos;
-    vec3 displacement = vec3(0.0, uLevel, 0.0);
-    for (int i = 0; i < 8; i++) {
-        vec2 dir = normalize(vec2(WAVES[i].x * cosA - WAVES[i].y * sinA + (fract(sin(float(i) * 785.1)) - 0.5) * uChaos,
-                                  WAVES[i].x * sinA + WAVES[i].y * cosA + (fract(sin(float(i) * 785.1)) - 0.5) * uChaos));
-        float k = 6.28318 / WAVES[i].w;
-        float a = (WAVES[i].w / 120.0) * baseAmp;
-        float phase = k * (dot(dir, pos.xz) - SPEEDS[i] * uTime * uTimeMultiplier);
-        displacement.y += a * sin(phase);
-        displacement.x += uSteepness * (WAVES[i].w / 80.0) * a * dir.x * cos(phase);
-        displacement.z += uSteepness * (WAVES[i].w / 80.0) * a * dir.y * cos(phase);
-    }
-    vec4 viewPos = uView * vec4(aPos + displacement, 1.0);
+    vec4 viewPos = uView * vec4(aPos, 1.0);
     vDepth = -viewPos.z;
     gl_Position = uProjection * viewPos;
 }
@@ -413,195 +329,49 @@ void main() {
     public const string OCEAN_FRAG = @"
 #version 450 core
 in vec3 vWorldPos;
-in vec3 vNormal;
 in vec2 vUV;
+in float vFoam;
 in float vHeight;
+in vec3 vViewDir;
 
-uniform vec3  uCameraPos;
-uniform vec3  uLightDir;
-uniform vec3  uLightColor;
-uniform float uLightIntensity;
-uniform vec3  uRefractionColor;
-uniform vec3  uScatteringColor;
-uniform float uFoamAmount;
-uniform float uSparkleIntensity;
-uniform float uMicroRipple;
-uniform float uReflectionSaturation;
-uniform float uHorizonFade;
-
-uniform sampler2D uHdri;
-uniform float     uHdriStrength;
-uniform int       uHasHdri;
-uniform float     uTime;
-uniform int       uWeatherType;
-uniform float     uWeatherIntensity;
-uniform float     uLightning;
+uniform vec3 uWaterColor;
+uniform vec3 uFoamColor;
+uniform sampler2DArray uNormalMap;
+uniform sampler2D uSkybox; 
+uniform vec3 uCameraPos;
 
 out vec4 FragColor;
 
-const vec2 invAtan = vec2(0.1591, 0.3183);
-vec2 SampleEquirectangularMap(vec3 v) {
-    vec2 uv = vec2(atan(v.z, v.x), asin(v.y));
-    uv *= invAtan;
-    uv.x += 0.5;
-    uv.y = 0.5 - uv.y;
-    return uv;
-}
-
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f*f*(3.0-2.0*f);
-    return mix(mix(hash(i + vec2(0,0)), hash(i + vec2(1,0)), f.x),
-               mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
-}
-
-float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 3; i++) {
-        v += a * noise(p);
-        p *= 2.0;
-        a *= 0.5;
-    }
-    return v;
-}
-
 void main() {
+    float gridScale = 0.05;
+    vec2 worldUV = vWorldPos.xz * gridScale;
+    
+    // Unpack normal from gradient map
+    vec4 nm = texture(uNormalMap, vec3(worldUV, 0.0));
+    vec3 N = normalize(vec3(nm.x, 2.0, nm.y)); // Enhanced shallowing for better reflections
+    
     vec3 V = normalize(uCameraPos - vWorldPos);
-    vec3 N_surf = normalize(vNormal);
+    vec3 L = normalize(vec3(0.5, 1.0, 0.3)); // Sun
     
-    // Check if we are viewing the underside (underwater)
-    bool isUnderwater = dot(N_surf, V) < 0.0;
-    vec3 N = isUnderwater ? -N_surf : N_surf;
-    
-    float distToCam = length(vWorldPos - uCameraPos);
-    
-    // 1. High-Frequency Micro-Normal Detail
-    vec2 uvDetail = vWorldPos.xz * 1.5;
-    float m1 = noise(uvDetail * 4.0 + uTime * 0.2);
-    float m2 = noise(uvDetail * 15.0 - uTime * 0.5);
-    float microDetail = (m1 + m2 * 0.5) * uMicroRipple * smoothstep(500.0, 50.0, distToCam);
-    N = normalize(N + vec3(microDetail * 0.1, 0.0, microDetail * 0.1));
-
-    // 2. Procedural Rain Splashes & Glowy Impacts
-    vec3 splashCol = vec3(0.0);
-    if (uWeatherType == 1 && uWeatherIntensity > 0.1) {
-        float sI = uWeatherIntensity * smoothstep(400.0, 50.0, distToCam);
-        vec2 p = vWorldPos.xz * 3.5; 
-        float rAcc = 0.0;
-        for(int i=0; i<6; i++) { // Increased iterations from 3 to 6
-            float shift = float(i) * 55.67;
-            vec2 g = floor(p + shift);
-            vec2 fv = fract(p + shift);
-            float h = hash(g + shift);
-            if (h > 0.6) { // Lowered threshold from 0.8 to 0.6
-                float t = fract(uTime * 2.5 + h * 6.28);
-                float d = length(fv - 0.5);
-                float mask = smoothstep(0.5, 0.0, d) * (1.0 - t);
-                rAcc += sin(d * 48.0 - t * 35.0) * mask * sI * 1.5;
-                splashCol += vec3(0.9, 0.95, 1.0) * smoothstep(0.12, 0.0, abs(d - t * 0.5)) * mask * sI * 2.0;
-            }
-        }
-        N = normalize(N + vec3(rAcc, 0.0, rAcc) * 0.15);
-    }
-
-    vec3 L = normalize(-uLightDir);
-    vec3 R = reflect(-V, N);
-    vec3 H = normalize(L + V);
-
-    // 2. Advanced Fresnel & Refraction
+    // Fresnel
     float dotNV = max(dot(N, V), 0.0);
-    float fresnel = 0.02 + 0.98 * pow(1.0 - dotNV, 5.0);
-
-    // Underwater Total Internal Reflection approximation
-    if (isUnderwater) {
-        fresnel = 0.1 + 0.9 * pow(1.0 - dotNV, 3.0);
-    }
-
-    float depthFactor = smoothstep(-2.0, 2.0, vHeight);
-    vec3 waterBase = mix(uScatteringColor * 0.1, uRefractionColor, dotNV * 0.7 + 0.3);
-    waterBase = mix(waterBase * 0.4, waterBase, depthFactor); 
+    float fresnel = 0.04 + 0.96 * pow(1.0 - dotNV, 5.0);
     
-    // If underwater, darken the base water color
-    if (isUnderwater) {
-        waterBase *= 0.6;
-    }
-
-    // 3. Environment Reflection
-    vec3 reflection = vec3(0.0);
-    if (uHasHdri == 1) {
-        vec3 sampleR = R;
-        // Above water: clamp to horizon. Below water: allow looking down to floor/darkness
-        if (!isUnderwater) {
-            sampleR.y = max(sampleR.y, 0.05); 
-        }
-        
-        reflection = texture(uHdri, SampleEquirectangularMap(sampleR)).rgb;
-        
-        float lum = dot(reflection, vec3(0.299, 0.587, 0.114));
-        reflection = mix(vec3(lum), reflection, uReflectionSaturation);
-        reflection *= uHdriStrength;
-    } else {
-        reflection = mix(uScatteringColor * 0.5, vec3(0.8, 0.9, 1.0), R.y * 0.5 + 0.5);
-    }
-
-    // 4. Subsurface Scattering (Backlit Glow)
-    float sss = pow(max(dot(V, -L), 0.0), 8.0) * smoothstep(-1.0, 1.0, vHeight) * 0.5;
-    vec3 sssColor = uRefractionColor * sss * uLightIntensity;
-
-    // 5. Specular Highlights & Sparkles - MATTE FINISH
-    float specBase = pow(max(dot(N, H), 0.0), 16.0); // MUCH ROUGHER
-    float sparkleNoise = noise(vWorldPos.xz * 100.0 + uTime * 1.5);
-    float sparkles = pow(max(dot(N, H), 0.0), 12.0) * sparkleNoise * uSparkleIntensity;
-    vec3 specular = (specBase * 0.15 + sparkles * 0.1) * uLightColor * uLightIntensity; 
+    // Reflection
+    vec3 R = reflect(-V, N);
+    vec3 reflection = texture(uSkybox, R.xy * 0.5 + 0.5).rgb; // Mapping to 2D skybox for now
     
-    if (isUnderwater) {
-        specular *= 0.2;
+    // Deep water color
+    vec3 baseColor = mix(uWaterColor * 0.2, uWaterColor, clamp(vHeight * 0.5 + 0.5, 0.0, 1.0));
+    
+    vec3 color = mix(baseColor, reflection, fresnel * 0.8);
+    
+    // Foam (Whitecaps)
+    if (vFoam > 0.05) {
+        color = mix(color, uFoamColor, vFoam);
     }
-
-    // 6. Organic Foam
-    float foam = 0.0;
-    if (!isUnderwater) {
-        float crest = smoothstep(0.15, 0.45, vHeight);
-        float foamNoise = fbm(vWorldPos.xz * 30.0 + uTime * 0.1);
-        float foamPattern = smoothstep(0.4, 0.6, foamNoise);
-        foam = crest * foamPattern * uFoamAmount;
-    }
-
-    // Final Composition - Aggressively dampen reflections for storm water
-    float reflectionStrength = isUnderwater ? 0.3 : 0.25; 
-    vec3 color = mix(waterBase, reflection, fresnel * reflectionStrength);
     
-    color += sssColor * 0.3;
-    color += specular;
-    color += splashCol; // ADD GLOWY SPLASHES
-    
-    // LIGHTNING REFLECTION - also dampened to avoid chrome look
-    color += vec3(0.7, 0.85, 1.0) * uLightning * 1.2 * dotNV;
-    
-    if (foam > 0.0) {
-        color = mix(color, vec3(0.95, 1.0, 1.0), foam);
-    }
-
-    // Horizon Atmospheric Blend
-    if (!isUnderwater) {
-        float horizonMask = smoothstep(200.0, 1000.0, distToCam);
-        color = mix(color, reflection, horizonMask * uHorizonFade);
-    }
-
-    color = color / (color + vec3(1.0));
-    color = pow(color, vec3(1.0/2.2));
-    
-    // MUCH MORE OPAQUE (especially in storm)
-    float baseAlpha = isUnderwater ? 0.4 : 0.85; 
-    float alpha = mix(baseAlpha, 0.98, fresnel + foam + uLightning * 0.5);
-    
-    FragColor = vec4(color, alpha);
+    FragColor = vec4(color, 0.98);
 }
 ";
 
@@ -1030,22 +800,335 @@ uniform float uOutlineWidth;
 out vec4 FragOut;
 
 void main() {
-    vec3 scene = texture(uScene, vUV).rgb;
     float mask = texture(uMask, vUV).r;
+    vec4 sceneColor = texture(uScene, vUV);
     
-    // Sample neighbors to detect edges
+    if (mask > 0.5) {
+        FragOut = sceneColor;
+        return;
+    }
+    
     float edge = 0.0;
-    for (float x = -uOutlineWidth; x <= uOutlineWidth; x += 1.0) {
-        for (float y = -uOutlineWidth; y <= uOutlineWidth; y += 1.0) {
-            float neighbor = texture(uMask, vUV + vec2(x, y) * uTexelSize).r;
-            edge = max(edge, neighbor);
+    int radius = int(uOutlineWidth);
+    for (int x = -radius; x <= radius; x++) {
+        for (int y = -radius; y <= radius; y++) {
+            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+            edge += texture(uMask, vUV + offset).r;
         }
     }
     
-    // Edge pixel = neighbor has mask but current pixel doesn't
-    float outline = edge * (1.0 - mask);
-    
-    FragOut = vec4(mix(scene, uOutlineColor.rgb, outline * uOutlineColor.a), 1.0);
+    if (edge > 0.1) {
+        FragOut = uOutlineColor;
+    } else {
+        FragOut = sceneColor;
+    }
+}
+";
+
+    // === FFT OCEAN COMPUTE SHADERS ===
+
+    public const string SPECTRA_COMPUTE = @"
+#version 460
+#define PI (3.141592653589793)
+#define G  (9.81)
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(rgba16f, binding = 0) restrict writeonly uniform image2DArray spectrum;
+
+uniform struct {
+	ivec2 seed;
+	vec2 tile_length;
+	float alpha;
+	float peak_frequency;
+	float wind_speed;
+	float angle;
+	float depth;
+	float swell;
+	float detail;
+	float spread;
+	uint cascade_index;
+} pc;
+
+vec2 hash(uvec2 x) {
+	uint h32 = x.y + 374761393U + x.x*3266489917U;
+    h32 = 2246822519U * (h32 ^ (h32 >> 15));
+    h32 = 3266489917U * (h32 ^ (h32 >> 13));
+    uint n = h32 ^ (h32 >> 16);
+    uvec2 rz = uvec2(n, n*48271U);
+    return vec2((rz.xy >> 1) & uvec2(0x7FFFFFFFU)) / float(0x7FFFFFFF);
+}
+
+vec2 gaussian(vec2 x) {
+	float r = sqrt(-2.0 * log(max(x.x, 1e-6)));
+	float theta = 2.0*PI * x.y;
+	return vec2(r*cos(theta), r*sin(theta));
+}
+
+vec2 conj_complex(vec2 x) { return vec2(x.x, -x.y); }
+
+vec2 dispersion_relation(float k) {
+	float a = k*pc.depth;
+	float b = tanh(clamp(a, 0.0, 10.0));
+	float omega = sqrt(G*k*b);
+	float d_omega = 0.5*G * (b + a*(1.0 - b*b)) / (omega + 1e-6);
+	return vec2(omega, d_omega);
+}
+
+float longuet_higgins_normalization(float s) {
+	float a = sqrt(s);
+	return (s < 0.4) ? (0.5/PI) + s*(0.220636+s*(-0.109+s*0.090)) : inversesqrt(PI)*(a*0.5 + (1.0/a)*0.0625);
+}
+
+float longuet_higgins_function(float s, float theta) {
+	return longuet_higgins_normalization(s) * pow(abs(cos(theta*0.5)), 2.0*s);
+}
+
+float hasselmann_directional_spread(float w, float w_p, float wind_speed, float theta) {
+	float p = w / (w_p + 1e-6);
+	float s = (w <= w_p) ? 6.97*pow(abs(p), 4.06) : 9.77*pow(abs(p), -2.33 - 1.45*(wind_speed*w_p/G - 1.17));
+	float s_xi = 16.0 * tanh(w_p / (w + 1e-6)) * pc.swell*pc.swell; 
+    return longuet_higgins_function(s + s_xi, theta - pc.angle);
+}
+
+float TMA_spectrum(float w, float w_p, float alpha) {
+	const float beta = 1.25;
+	const float gamma = 3.3; 
+	float sigma = (w <= w_p) ? 0.07 : 0.09;
+	float r = exp(-(w-w_p)*(w-w_p) / (2.0 * sigma*sigma * w_p*w_p + 1e-6));
+	float jonswap = (alpha * G*G) / pow(w + 1e-6, 5) * exp(-beta * pow(w_p/(w+1e-6), 4)) * pow(gamma, r);
+	float w_h = min(w * sqrt(pc.depth / G), 2.0);
+	float kitaigorodskii = (w_h <= 1.0) ? 0.5*w_h*w_h : 1.0 - 0.5*(2.0-w_h)*(2.0-w_h);
+	return jonswap * kitaigorodskii;
+}
+
+vec2 get_spectrum_amplitude(ivec2 id, ivec2 map_size) {
+	vec2 dk = 2.0*PI / pc.tile_length;
+	vec2 k_vec = (vec2(id) - vec2(map_size)*0.5)*dk;
+	float k = length(k_vec) + 1e-6;
+	float theta = atan(k_vec.x, k_vec.y);
+	vec2 dispersion = dispersion_relation(k);
+	float w = dispersion[0];
+	float w_norm = dispersion[1] / k * dk.x*dk.y;
+	float s = TMA_spectrum(w, pc.peak_frequency, pc.alpha);
+	float d = mix(0.5/PI, hasselmann_directional_spread(w, pc.peak_frequency, pc.wind_speed, theta), 1.0 - pc.spread);
+    d *= exp(-(1.0-pc.detail)*(1.0-pc.detail) * k*k);
+	return gaussian(hash(uvec2(id + pc.seed))) * sqrt(max(0.0, 2.0 * s * d * w_norm));
+}
+
+void main() {
+	ivec2 dims = imageSize(spectrum).xy;
+	ivec3 gid = ivec3(gl_GlobalInvocationID.xy, pc.cascade_index);
+	ivec2 id0 = gid.xy;
+	ivec2 id1 = ivec2(mod(vec2(dims) - vec2(id0), vec2(dims)));
+	imageStore(spectrum, gid, vec4(get_spectrum_amplitude(id0, dims), conj_complex(get_spectrum_amplitude(id1, dims))));
+}
+";
+
+    public const string SPECTRA_MODULATE = @"
+#version 460
+#define PI 3.141592653589793
+#define G  9.81
+#define NUM_SPECTRA 4U
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16f, binding = 0) restrict readonly uniform image2DArray spectrum;
+layout(std430, binding = 1) restrict writeonly buffer FFTBuffer { vec2 data[]; };
+
+uniform struct {
+	vec2 tile_length;
+	float depth;
+	float time;
+	uint cascade_index;
+    uint mapSize;
+} pc;
+
+vec2 exp_complex(float x) { return vec2(cos(x), sin(x)); }
+vec2 mul_complex(vec2 a, vec2 b) { return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+vec2 conj_complex(vec2 x) { return vec2(x.x, -x.y); }
+float dispersion_relation(float k) { return sqrt(G*k*tanh(clamp(k*pc.depth, 0.0, 10.0))); }
+
+void main() {
+	uint map_size = pc.mapSize;
+	ivec2 dims = imageSize(spectrum).xy;
+	ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    uint cascade_idx = pc.cascade_index;
+
+	vec2 k_vec = (vec2(gid) - vec2(dims)*0.5)*2.0*PI / pc.tile_length;
+	float k = length(k_vec) + 1e-6;
+	vec2 k_unit = k_vec / k;
+
+	vec4 h0 = imageLoad(spectrum, ivec3(gid, cascade_idx));
+	float dispersion = dispersion_relation(k) * pc.time;
+	vec2 modulation = exp_complex(dispersion);
+	vec2 h = mul_complex(h0.xy, modulation) + mul_complex(h0.zw, conj_complex(modulation));
+	vec2 h_inv = vec2(-h.y, h.x);
+
+	vec2 hx = h_inv * k_unit.y;
+	vec2 hy = h;
+	vec2 hz = h_inv * k_unit.x;
+	vec2 dhy_dx = h_inv * k_vec.y;
+	vec2 dhy_dz = h_inv * k_vec.x;
+	vec2 dhx_dx = -h * k_vec.y * k_unit.y;
+	vec2 dhz_dz = -h * k_vec.x * k_unit.x;
+	vec2 dhz_dx = -h * k_vec.y * k_unit.x;
+
+    uint m2 = map_size * map_size;
+    uint offset = cascade_idx * m2 * NUM_SPECTRA * 2;
+	data[offset + 0*m2 + gid.y*map_size + gid.x] = vec2(hx.x - hy.y, hx.y + hy.x);
+	data[offset + 1*m2 + gid.y*map_size + gid.x] = vec2(hz.x - dhy_dx.y, hz.y + dhy_dx.x);
+	data[offset + 2*m2 + gid.y*map_size + gid.x] = vec2(dhy_dz.x - dhx_dx.y, dhy_dz.y + dhx_dx.x);
+	data[offset + 3*m2 + gid.y*map_size + gid.x] = vec2(dhz_dz.x - dhz_dx.y, dhz_dz.y + dhz_dx.x);
+}
+";
+
+    public const string FFT_BUTTERFLY = @"
+#version 460
+#define PI 3.141592653589793
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) restrict writeonly buffer Butterfly { vec4 bf[]; };
+uniform uint uMapSize;
+
+vec2 exp_complex(float x) { return vec2(cos(x), sin(x)); }
+
+void main() {
+	uint map_size = uMapSize;
+	uint col = gl_GlobalInvocationID.x;
+	uint stage = gl_GlobalInvocationID.y;
+	uint stride = 1 << stage, mid = map_size >> (stage + 1);
+	uint i = col >> stage, j = col % stride;
+	vec2 twiddle = exp_complex(PI / float(stride) * float(j));
+	uint r0 = stride*(i + 0) + j, r1 = stride*(i + mid) + j;
+	uint w0 = stride*(2*i + 0) + j, w1 = stride*(2*i + 1) + j;
+	bf[stage*map_size + w0] = vec4(uintBitsToFloat(r0), uintBitsToFloat(r1),  twiddle);
+	bf[stage*map_size + w1] = vec4(uintBitsToFloat(r0), uintBitsToFloat(r1), -twiddle);
+}
+";
+
+    public const string FFT_COMPUTE = @"
+#version 460
+#define MAX_MAP_SIZE 2048
+layout(local_size_x = 1024) in;
+layout(std430, binding = 0) restrict readonly buffer Butterfly { vec4 bf[]; };
+layout(std430, binding = 1) restrict buffer FFT { vec2 data[]; };
+
+shared vec2 row_shared[2 * MAX_MAP_SIZE];
+
+uniform uint uCascadeIndex;
+uniform uint uMapSize;
+
+vec2 mul_complex(vec2 a, vec2 b) { return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+
+void main() {
+	uint map_size = uMapSize;
+	uint num_stages = findMSB(map_size);
+	uint col = gl_GlobalInvocationID.x;
+	uint row = gl_GlobalInvocationID.y;
+	uint spectrum = gl_GlobalInvocationID.z;
+    if (col >= map_size) return;
+
+    uint m2 = map_size * map_size;
+    uint cascade_offset = uCascadeIndex * m2 * 4 * 2;
+	row_shared[col] = data[cascade_offset + spectrum*m2 + row*map_size + col];
+
+	for (uint stage = 0; stage < num_stages; ++stage) {
+		barrier();
+		uint read_off = (stage % 2) * MAX_MAP_SIZE;
+		uint write_off = ((stage + 1) % 2) * MAX_MAP_SIZE;
+		vec4 b = bf[stage*map_size + col];
+		uint r0 = floatBitsToUint(b.x), r1 = floatBitsToUint(b.y);
+		vec2 tw = b.zw;
+		vec2 upper = row_shared[read_off + r0];
+		vec2 lower = row_shared[read_off + r1];
+		row_shared[write_off + col] = upper + mul_complex(lower, tw);
+	}
+    barrier();
+    // Copy to output layer of the buffer swap
+	data[cascade_offset + (spectrum + 4)*m2 + row*map_size + col] = row_shared[(num_stages % 2) * MAX_MAP_SIZE + col];
+}
+";
+
+    public const string FFT_TRANSPOSE = @"
+#version 460
+#define TILE_SIZE 32
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
+layout(std430, binding = 1) restrict buffer FFT { vec2 data[]; };
+shared vec2 tile[TILE_SIZE][TILE_SIZE+1];
+
+uniform uint uCascadeIndex;
+uniform uint uMapSize;
+
+void main() {
+	uint map_size = uMapSize;
+    uint m2 = map_size * map_size;
+    uint cascade_offset = uCascadeIndex * m2 * 8;
+	uint spectrum = gl_GlobalInvocationID.z;
+
+	uvec2 id = gl_GlobalInvocationID.xy;
+	tile[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = data[cascade_offset + (spectrum + 4)*m2 + id.y*map_size + id.x];
+	barrier();
+	uvec2 tid = gl_WorkGroupID.yx * TILE_SIZE + gl_LocalInvocationID.xy;
+	data[cascade_offset + spectrum*m2 + tid.y*map_size + tid.x] = tile[gl_LocalInvocationID.x][gl_LocalInvocationID.y];
+}
+";
+
+    public const string FFT_UNPACK = @"
+#version 460
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 2) in;
+layout(rgba16f, binding = 0) restrict writeonly uniform image2DArray displacement_map;
+layout(rgba16f, binding = 1) restrict uniform image2DArray normal_map;
+layout(std430, binding = 2) restrict readonly buffer FFT { vec2 data[]; };
+
+uniform struct {
+	uint cascade_index;
+	float whitecap;
+	float foam_grow_rate;
+	float foam_decay_rate;
+    uint mapSize;
+} pc;
+
+void main() {
+	uint map_size = pc.mapSize;
+    uint m2 = map_size * map_size;
+    uint cascade_offset = pc.cascade_index * m2 * 8;
+	ivec3 id = ivec3(gl_GlobalInvocationID.xy, pc.cascade_index);
+	float sign_shift = float(-2*int((id.x & 1) ^ (id.y & 1)) + 1);
+
+	if (gl_LocalInvocationID.z == 0) {
+        // Displacements are in layers 4, 5, 6, 7 of the FFT output (after row/col passes)
+        // Layer 0: Hx, Hy  Layer 1: Hz, dHy_dx ...
+        // Wait, SPECTRA_MODULATE packed:
+        // 0: hx, hy
+        // 1: hz, dhy_dx
+        // 2: dhy_dz, dhx_dx
+        // 3: dhz_dz, dhz_dx
+        
+        vec2 d0 = data[cascade_offset + 4*m2 + id.y*map_size + id.x] * sign_shift;
+        vec2 d1 = data[cascade_offset + 5*m2 + id.y*map_size + id.x] * sign_shift;
+        
+        float hx = d0.x;
+        float hy = d0.y;
+        float hz = d1.x;
+		imageStore(displacement_map, id, vec4(hx, hy, hz, 0));
+	} else {
+        float dhy_dx = data[cascade_offset + 5*m2 + id.y*map_size + id.x].y * sign_shift;
+        vec2 d2 = data[cascade_offset + 6*m2 + id.y*map_size + id.x] * sign_shift;
+        vec2 d3 = data[cascade_offset + 7*m2 + id.y*map_size + id.x] * sign_shift;
+        
+        float dhy_dz = d2.x;
+        float dhx_dx = d2.y;
+        float dhz_dz = d3.x;
+        float dhz_dx = d3.y;
+
+        float jacobian = (1.0 + dhx_dx) * (1.0 + dhz_dz) - dhz_dx * dhz_dx;
+        float foam_factor = -min(0.0, jacobian - pc.whitecap);
+        
+        float foam = imageLoad(normal_map, id).a;
+        foam *= exp(-pc.foam_decay_rate);
+        foam += foam_factor * pc.foam_grow_rate;
+        foam = clamp(foam, 0.0, 1.0);
+
+        vec2 gradient = vec2(dhy_dx, dhy_dz) / (1.0 + abs(vec2(dhx_dx, dhz_dz)));
+        imageStore(normal_map, id, vec4(gradient, dhx_dx, foam));
+	}
 }
 ";
 }

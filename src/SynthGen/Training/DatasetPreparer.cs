@@ -19,10 +19,12 @@ public static class DatasetPreparer
     /// 3. Generates data.yaml.
     /// Returns the path to data.yaml, or null on failure.
     /// </summary>
-    public static string Prepare(string outputDir, float trainSplit, Action<string>? log = null)
+    public static string Prepare(string outputDir, float trainSplit, string task = "detect", Action<string>? log = null)
     {
         string rgbDir = Path.Combine(outputDir, "rgb");
-        string labelsDir = Path.Combine(outputDir, "labels");
+        // For pose tasks, use the specialized keypoint labels folder
+        string labelsSubDir = task == "pose" ? "keypoint_labels" : "labels";
+        string labelsDir = Path.Combine(outputDir, labelsSubDir);
 
         if (!Directory.Exists(rgbDir))
         {
@@ -106,10 +108,61 @@ public static class DatasetPreparer
             writer.Write("names: [");
             writer.Write(string.Join(", ", classNames.OrderBy(kv => kv.Key).Select(kv => $"'{kv.Value}'")));
             writer.WriteLine("]");
+
+            // YOLOv8-Pose requires kpt_shape: [num_keypoints, dim]
+            if (task == "pose")
+            {
+                int kptCount = DiscoverKeypointCount(outputDir);
+                writer.WriteLine($"kpt_shape: [{kptCount}, 3]");
+                log?.Invoke($"[DataPrep] Pose task detected. Added kpt_shape: [{kptCount}, 3] to data.yaml");
+            }
         }
 
         log?.Invoke($"[DataPrep] ✅ data.yaml written → {yamlPath}");
         return yamlPath;
+    }
+
+    private static int DiscoverKeypointCount(string outputDir)
+    {
+        // Try to get from COCO annotations if they were exported
+        string cocoPath = Path.Combine(outputDir, "annotations.json");
+        if (File.Exists(cocoPath))
+        {
+            try
+            {
+                string json = File.ReadAllText(cocoPath);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("categories", out var cats) && cats.GetArrayLength() > 0)
+                {
+                    var cat = cats[0];
+                    if (cat.TryGetProperty("keypoints", out var kpts))
+                        return kpts.GetArrayLength();
+                }
+            }
+            catch { }
+        }
+
+        // Fallback: Check if we have keypoint labels and try to count parts
+        string kpLabels = Path.Combine(outputDir, "keypoint_labels");
+        if (Directory.Exists(kpLabels))
+        {
+            string[] files = Directory.GetFiles(kpLabels, "*.txt");
+            if (files.Length > 0)
+            {
+                string line = File.ReadLines(files[0]).FirstOrDefault("");
+                if (!string.IsNullOrEmpty(line))
+                {
+                    // YOLO Pose line: class cx cy w h [x y v] * N
+                    var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length > 5)
+                    {
+                        return (parts.Length - 5) / 3;
+                    }
+                }
+            }
+        }
+
+        return 17; // Final fallback to COCO standard
     }
 
     /// <summary>

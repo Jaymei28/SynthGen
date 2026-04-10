@@ -159,6 +159,11 @@ public class CaptureManager
                     }
                 }
 
+                // Update bone-bound keypoint positions BEFORE capture
+                // so they reflect the current animation frame
+                if (ExportKeypointPose)
+                    UpdateBoneKeypointPositions();
+
                 // Re-render the scene at this animation pose
                 // (The renderer will pick up updated bone poses from the animation player)
                 _renderer.RenderScene(_scene, _ocean, totalTime + animTime);
@@ -169,6 +174,11 @@ public class CaptureManager
         }
         else
         {
+            // Update bone-bound keypoint positions BEFORE capture
+            // so they reflect the current frame's bone transforms
+            if (ExportKeypointPose)
+                UpdateBoneKeypointPositions();
+
             // Standard mode: single snapshot per iteration
             _renderer.RenderScene(_scene, _ocean, totalTime);
             
@@ -212,8 +222,8 @@ public class CaptureManager
 
         OnLog?.Invoke($"[Frame {frameIndex}] Captured RGB/Seg/Depth");
 
-        // Generate keypoint annotations (Only if mode is set to Keypoints)
-        if (Mode == Annotation.AnnotationMode.Keypoints && ExportKeypointPose)
+        // Generate keypoint annotations whenever keypoint export is enabled
+        if (ExportKeypointPose)
         {
             GenerateKeypointAnnotations(frameIndex, frameName);
         }
@@ -263,7 +273,7 @@ public class CaptureManager
             OnLog?.Invoke("[Capture] COCO annotations saved.");
         }
 
-        if (ExportKeypointPose && Mode == Annotation.AnnotationMode.Keypoints)
+        if (ExportKeypointPose)
         {
             OnLog?.Invoke($"[Capture] Keypoint pose labels saved to keypoint_labels/");
         }
@@ -301,6 +311,13 @@ public class CaptureManager
             }
 
             OnLog?.Invoke($"[Frame {frameIndex}] {annotations.Count} person(s), keypoints exported");
+        }
+        else
+        {
+            // Write empty file so user knows the frame was processed
+            File.WriteAllText(
+                Path.Combine(OutputDirectory, "keypoint_labels", $"{frameName}.txt"), "");
+            OnLog?.Invoke($"[Frame {frameIndex}] WARNING: No keypoints detected — check bone bindings and camera view");
         }
     }
 
@@ -367,5 +384,64 @@ public class CaptureManager
         string path = Path.Combine(OutputDirectory, $"preview_{DateTime.Now:yyyyMMdd_HHmmss}.png");
         SaveImage(pixels, _renderer.Width, _renderer.Height, path);
         OnLog?.Invoke($"[Capture] Preview saved: {path}");
+    }
+
+    /// <summary>
+    /// Updates all bone-bound keypoint node positions to follow their skeleton bones.
+    /// This mirrors the logic in Application.UpdateBoneKeypointPositions() but is called
+    /// explicitly during generation to ensure keypoint positions are up-to-date BEFORE capture.
+    /// </summary>
+    private void UpdateBoneKeypointPositions()
+    {
+        var rootsProcessed = new HashSet<Scene.SceneObject>();
+
+        foreach (var obj in _scene.Objects)
+        {
+            var kp = obj.GetComponent<KeypointComponent>();
+            if (kp == null || string.IsNullOrEmpty(kp.BoundBoneName)) continue;
+
+            // Walk up to find the root parent
+            var root = obj;
+            while (root.Parent != null) root = root.Parent;
+
+            // Find the skinned mesh + skeleton
+            var (skinnedObj, mr) = FindFirstSkinnedMeshInHierarchy(root);
+            if (skinnedObj == null || mr?.Mesh?.Skeleton == null) continue;
+
+            var skeleton = mr.Mesh.Skeleton;
+
+            // Apply animation to skeleton ONCE per root (ensures bone transforms are current)
+            if (rootsProcessed.Add(root))
+            {
+                var anim = skinnedObj.GetComponent<AnimationPlayerComponent>();
+                if (anim != null && mr.Mesh.Clips.Count > 0)
+                {
+                    int clipIdx = anim.CurrentClipIndex % mr.Mesh.Clips.Count;
+                    mr.Mesh.Clips[clipIdx].Apply(skeleton, anim.PlaybackTime);
+                }
+            }
+
+            // Now read the bone's updated transform
+            if (!skeleton.BonesByName.TryGetValue(kp.BoundBoneName, out var bone)) continue;
+
+            var boneInModel = bone.GlobalTransform * skeleton.GlobalInverseTransform;
+            var objectWorldMatrix = skinnedObj.GetWorldMatrix();
+            var jointWorld = boneInModel * objectWorldMatrix;
+
+            obj.Transform.Position = Vector3.Transform(kp.BoneOffset, jointWorld);
+        }
+    }
+
+    private static (Scene.SceneObject?, MeshRendererComponent?) FindFirstSkinnedMeshInHierarchy(Scene.SceneObject obj)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr?.Mesh != null && mr.Mesh.HasSkinning && mr.Mesh.Skeleton != null)
+            return (obj, mr);
+        foreach (var child in obj.Children)
+        {
+            var result = FindFirstSkinnedMeshInHierarchy(child);
+            if (result.Item1 != null) return result;
+        }
+        return (null, null);
     }
 }

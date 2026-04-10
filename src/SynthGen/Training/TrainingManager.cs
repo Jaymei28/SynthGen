@@ -23,7 +23,7 @@ public class TrainingManager
     public int ImgSize { get; set; } = 640;
     public float LearningRate { get; set; } = 0.01f;
     public int Workers { get; set; } = 4;
-    public int DeviceIndex { get; set; } = 0; // 0=GPU(0), 1=CPU
+    public int DeviceIndex { get; set; } = 1; // 0=GPU(0), 1=CPU — default to CPU for compatibility
     public int Patience { get; set; } = 50;
     public float TrainValSplit { get; set; } = 0.8f;
     public bool ResumeTraining { get; set; } = false;
@@ -64,7 +64,7 @@ public class TrainingManager
         try
         {
             // 1. Prepare dataset (train/val split + data.yaml)
-            string dataYamlPath = DatasetPreparer.Prepare(datasetDir, TrainValSplit, OnLog);
+            string dataYamlPath = DatasetPreparer.Prepare(datasetDir, TrainValSplit, SelectedTask, OnLog);
             if (string.IsNullOrEmpty(dataYamlPath))
             {
                 Status = TrainStatus.Failed;

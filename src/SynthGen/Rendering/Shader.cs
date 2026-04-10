@@ -30,6 +30,23 @@ public class Shader : IDisposable
         _gl.DeleteShader(fs);
     }
 
+    public Shader(GL gl, string computeSource)
+    {
+        _gl = gl;
+        uint cs = CompileShader(ShaderType.ComputeShader, computeSource);
+
+        Handle = _gl.CreateProgram();
+        _gl.AttachShader(Handle, cs);
+        _gl.LinkProgram(Handle);
+        _gl.GetProgram(Handle, ProgramPropertyARB.LinkStatus, out int status);
+        if (status == 0)
+        {
+            string log = _gl.GetProgramInfoLog(Handle);
+            throw new Exception($"Compute shader link error: {log}");
+        }
+        _gl.DeleteShader(cs);
+    }
+
     private uint CompileShader(ShaderType type, string source)
     {
         uint shader = _gl.CreateShader(type);

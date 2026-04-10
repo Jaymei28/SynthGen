@@ -1886,33 +1886,66 @@ public class UIManager
             ImGui.Checkbox("Ocean Enabled", ref cfg.Enabled);
             ImGui.Separator();
 
-            // 1. THE FORMULA (Wave Shapes & Motion)
-            ImGui.TextColored(new Vector4(0.3f, 0.7f, 1f, 1), "[ The Formula ]");
-            ImGui.SliderFloat("Time Speed", ref cfg.TimeMultiplier, 0, 5);
-            ImGui.SliderFloat("Wind Speed", ref cfg.LargeWindSpeed, 0, 100);
-            ImGui.SliderFloat("Wind Direction", ref cfg.WindDirection, 0, 360);
-            ImGui.SliderFloat("Storm Intensity", ref cfg.StormIntensity, 0, 1);
-            ImGui.SliderFloat("Steepness", ref cfg.LargeSteepness, 0, 1);
-            ImGui.SliderFloat("Chaos", ref cfg.LargeChaos, 0, 1);
-            ImGui.SliderFloat("Water Level", ref cfg.Level, -10, 10);
+            // --- OceanWaves Header ---
+            ImGui.TextUnformatted("— OceanWaves");
+            ImGui.Text($"FPS: {(int)ImGui.GetIO().Framerate} ({1000f/ImGui.GetIO().Framerate:F2}ms)");
             
+            ImGui.Checkbox("Enable Sea Spray:", ref cfg.EnableSeaSpray);
+            
+            string[] resNames = { "512x512", "1024x1024", "2048x2048" };
+            ImGui.Combo("Wave Resolution:", ref cfg.WaveResolutionIndex, resNames, resNames.Length);
+            
+            string[] qualNames = { "Low", "High", "Ultra" };
+            ImGui.Combo("Wave Mesh Quality:", ref cfg.WaveMeshQualityIndex, qualNames, qualNames.Length);
+            
+            ImGui.SliderFloat("Updates per Second:", ref cfg.UpdatesPerSecond, 1, 120);
+            
+            ImGui.ColorEdit3("Water Color:", ref cfg.WaterColor, ImGuiColorEditFlags.NoInputs);
+            ImGui.ColorEdit3("Foam Color:", ref cfg.FoamColor, ImGuiColorEditFlags.NoInputs);
+
+            ImGui.Spacing();
+            ImGui.TextUnformatted("— Wave Parameters");
+            
+            if (ImGui.BeginTabBar("WaveCascades"))
+            {
+                if (ImGui.BeginTabItem("Cascade 1"))
+                {
+                    ImGui.DragFloat2("Tile Length:", ref cfg.TileLength, 1f, 1f, 500f);
+                    ImGui.SliderFloat("Time Scale:", ref cfg.TimeScale, 0f, 10f);
+                    
+                    ImGui.Separator();
+                    ImGui.SliderFloat("Wind Speed:", ref cfg.WindSpeed, 0f, 60f);
+                    ImGui.SliderFloat("Wind Direction:", ref cfg.WindDirection, -360f, 360f, "%.0f deg");
+                    ImGui.SliderFloat("Fetch Length:", ref cfg.FetchLength, 0.1f, 1000f);
+                    ImGui.SliderFloat("Swell:", ref cfg.Swell, 0f, 1f);
+                    ImGui.SliderFloat("Detail:", ref cfg.Detail, 0f, 1f);
+                    ImGui.SliderFloat("Spread:", ref cfg.Spread, 0f, 1f);
+                    
+                    ImGui.Separator();
+                    ImGui.SliderFloat("Whitecap:", ref cfg.Whitecap, 0f, 2f);
+                    ImGui.SliderFloat("Foam Amount:", ref cfg.FoamAmount, 0f, 10f);
+                    
+                    ImGui.EndTabItem();
+                }
+                ImGui.EndTabBar();
+            }
+
+            ImGui.Spacing();
+            ImGui.TextUnformatted("— Camera");
+            var cam = _app.Scene.ActiveCamera;
+            if (cam != null)
+            {
+                var camPos = cam.Transform.Position;
+                ImGui.Text($"Camera Position: ({camPos.X:F2}, {camPos.Y:F2}, {camPos.Z:F2})");
+                
+                float fov = cam.FieldOfView;
+                if (ImGui.SliderFloat("Camera FOV:", ref fov, 10, 120))
+                    cam.FieldOfView = fov;
+            }
+
             ImGui.Separator();
-
-            // 2. VISUAL LOOK (Tropical Styling)
-            ImGui.TextColored(new Vector4(0.3f, 0.7f, 1f, 1), "[ Visual Look ]");
-            ImGui.ColorEdit3("Shallow (Teal)", ref cfg.RefractionColor);
-            ImGui.ColorEdit3("Deep (Base)", ref cfg.ScatteringColor);
-            ImGui.SliderFloat("Foam Amount", ref cfg.FoamAmount, 0, 1);
-            ImGui.SliderFloat("Sparkle/Glitter", ref cfg.SparkleIntensity, 0, 10);
-            ImGui.SliderFloat("Micro-Ripples", ref cfg.MicroRippleStrength, 0, 1);
-            ImGui.SliderFloat("Refl Saturation", ref cfg.ReflectionSaturation, 0, 1);
-
-            ImGui.Separator();
-
-            // 3. THE PUSH (Buoyancy Interaction)
-            ImGui.TextColored(new Vector4(0.3f, 0.7f, 1f, 1), "[ The Push ]");
-            ImGui.SliderFloat("Buoyancy Force", ref cfg.BuoyancyForce, 0, 100);
-            ImGui.SliderFloat("Physics Damping", ref cfg.BuoyancyDamping, 0, 2);
+            ImGui.TextDisabled("Press Ctrl-H to toggle GUI visibility!");
+            ImGui.TextDisabled("Press Ctrl-F to toggle fullscreen!");
         }
 
         ImGui.End();
@@ -2177,7 +2210,10 @@ public class UIManager
         ImGui.Separator();
         ImGui.BeginChild("LogScroll");
 
-        foreach (var log in _logs)
+        // Take a snapshot to avoid "Collection was modified" during enumeration
+        // (CaptureManager/TrainingManager callbacks add to _logs from Update thread)
+        var logsSnapshot = _logs.ToArray();
+        foreach (var log in logsSnapshot)
         {
             Vector4 color = new(0.8f, 0.8f, 0.8f, 1);
             if (log.Contains("Error") || log.Contains("❌")) color = new(1, 0.3f, 0.3f, 1);

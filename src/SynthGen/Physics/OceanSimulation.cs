@@ -21,25 +21,29 @@ public enum WaterGeometryType
 /// </summary>
 public class OceanConfig
 {
-    // ── Simulation (The Formula) ──
-    public bool  Enabled = true;
-    public float Level = 0.0f;           
-    public float TimeMultiplier = 1.0f;
-    public float LargeWindSpeed = 10.0f; 
-    public float WindDirection = 45.0f;  
-    public float StormIntensity = 0.1f;  
-    public float LargeSteepness = 0.1f;
-    public float LargeChaos = 0.3f;      
+    // ── Global Settings ──
+    public bool Enabled = true;
+    public float Level = 0.0f;
+    public bool EnableSeaSpray = true;
+    public int WaveResolutionIndex = 1; // 0=512, 1=1024, 2=2048
+    public int WaveMeshQualityIndex = 1; // 0=Low, 1=High, 2=Ultra
+    public float UpdatesPerSecond = 50.0f;
+    public Vector3 WaterColor = new(0.04f, 0.12f, 0.2f);
+    public Vector3 FoamColor = new(0.9f, 0.85f, 0.85f);
     
-    // ── Visual Look (Tropical Sync) ──
-    public Vector3 RefractionColor = new(0.20f, 0.80f, 0.90f);
-    public Vector3 ScatteringColor = new(0.10f, 0.40f, 0.50f);
-    public float FoamAmount = 0.2f;
-    public float SparkleIntensity = 2.0f;
-    public float MicroRippleStrength = 0.8f;
-    public float ReflectionSaturation = 0.6f; 
-    
-    // ── Buoyancy (The Push) ──
+    // ── Wave Parameters (Cascade 1) ──
+    public Vector2 TileLength = new(100.0f, 100.0f);
+    public float TimeScale = 1.0f;
+    public float WindSpeed = 18.0f;
+    public float WindDirection = 25.0f; // degrees
+    public float FetchLength = 175.0f;
+    public float Swell = 0.8f;
+    public float Detail = 1.0f;
+    public float Spread = 0.286f;
+    public float Whitecap = 0.5f;
+    public float FoamAmount = 4.312f;
+
+    // ── Buoyancy (Hidden/Internal Physics) ──
     public float BuoyancyForce = 80.0f;
     public float BuoyancyDamping = 12.0f;
 }
