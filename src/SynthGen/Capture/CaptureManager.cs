@@ -53,10 +53,14 @@ public class CaptureManager
     private Annotation.COCOExporter? _cocoExporter;
     private bool _pendingCapture;
     private int _totalCapturedImages;
+    private SceneSnapshot? _snapshot;
 
     // Randomizer list — set externally by UI
     public List<Randomizers.RandomizerBase> ActiveRandomizers { get; set; } = new();
     public int RandomSeed { get; set; } = 42;
+
+    /// <summary>Set by UIManager so the snapshot can save/restore HDRI state.</summary>
+    public Randomizers.HDRIRandomizer? HdriRandomizer { get; set; }
 
     public CaptureManager(GL gl, Renderer renderer, SceneGraph scene, Physics.OceanSimulation ocean)
     {
@@ -68,6 +72,9 @@ public class CaptureManager
 
     public void StartGeneration(int numFrames)
     {
+        // Snapshot scene state BEFORE any randomizers run so we can restore later
+        _snapshot = SceneSnapshot.Capture(_scene, HdriRandomizer);
+
         TotalFrames = numFrames;
         CompletedFrames = 0;
         IsGenerating = true;
@@ -110,7 +117,9 @@ public class CaptureManager
         if (IsGenerating)
         {
             FinalizeGeneration();
-            OnLog?.Invoke("[Capture] Generation stopped by user.");
+            _snapshot?.Restore(_scene, HdriRandomizer);
+            _snapshot = null;
+            OnLog?.Invoke("[Capture] Generation stopped by user. Scene restored.");
         }
         _renderer.ShowSceneUI = true;
         IsGenerating = false;
@@ -123,6 +132,8 @@ public class CaptureManager
         if (CompletedFrames >= TotalFrames)
         {
             FinalizeGeneration();
+            _snapshot?.Restore(_scene, HdriRandomizer);
+            _snapshot = null;
             _renderer.ShowSceneUI = true;
             IsGenerating = false;
             LastImageCount = _totalCapturedImages;

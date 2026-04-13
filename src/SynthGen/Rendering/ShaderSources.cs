@@ -255,60 +255,82 @@ void main() {
 ";
 
     // === Ocean Shaders =======================================================
+    // Ported from GodotOceanWaves: Atlas GDC 2019 BSDF lighting model
+    // with GGX microfacet distribution, Smith masking-shadowing, SSS, and foam.
     public const string OCEAN_VERT = @"
 #version 450 core
 layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec2 aUV;
+layout (location = 2) in vec2 aUV;
 
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
-uniform float uTime;
 uniform sampler2DArray uDisplacementMap;
-uniform sampler2DArray uNormalMap;
+
+// Per-cascade scales: vec4(uvScaleX, uvScaleY, displacementScale, normalScale)
+uniform vec4 uMapScales[8];
+uniform int  uNumCascades;
 
 out vec3 vWorldPos;
 out vec2 vUV;
-out float vFoam;
-out float vHeight;
-out vec3 vViewDir;
+out float vWaveHeight;
 
 void main() {
-    float gridScale = 0.05; // Matches the tile size logic
-    vec2 worldUV = (uModel * vec4(aPos, 1.0)).xz * gridScale; 
+    vec3 baseWorldPos = (uModel * vec4(aPos, 1.0)).xyz;
+    vec2 uv = baseWorldPos.xz;
     
-    // Sample FFT Displacement (Cascade 0)
-    vec4 disp = texture(uDisplacementMap, vec3(worldUV, 0.0));
-    vec3 displacedPos = aPos + disp.xyz;
+    // Distance-based displacement falloff (fades after 150m from camera)
+    vec3 camPos = vec3(inverse(uView)[3]);
+    float dist = length(uv - camPos.xz);
+    float distanceFactor = min(exp(-(dist - 150.0) * 0.007), 1.0);
+
+    // Accumulate displacement from all cascades
+    vec3 displacement = vec3(0.0);
+    for (int i = 0; i < uNumCascades && i < 8; ++i) {
+        vec4 scales = uMapScales[i];
+        vec3 d = texture(uDisplacementMap, vec3(uv * scales.xy, float(i))).xyz;
+        displacement += d * scales.z;
+    }
     
-    vec4 worldPos = uModel * vec4(displacedPos, 1.0);
-    vWorldPos = worldPos.xyz;
-    vUV = aUV;
+    vec3 displacedPos = baseWorldPos + displacement * distanceFactor;
+    vWorldPos = displacedPos;
+    vUV = uv;
+    vWaveHeight = displacement.y;
     
-    // Sample Normal Map for foam info
-    vec4 normData = texture(uNormalMap, vec3(worldUV, 0.0));
-    vFoam = normData.a;
-    vHeight = disp.y;
-    
-    gl_Position = uProjection * uView * worldPos;
-    vViewDir = normalize(vec3(inverse(uView)[3]) - worldPos.xyz);
+    gl_Position = uProjection * uView * vec4(displacedPos, 1.0);
 }
 ";
 
     public const string OCEAN_DEPTH_VERT = @"
 #version 450 core
 layout(location = 0) in vec3 aPos;
+layout(location = 2) in vec2 aUV;
+
+uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
-uniform float uTime;
-uniform float uWindSpeed;
-uniform float uWindDirection;
-uniform float uTimeMultiplier;
+uniform sampler2DArray uDisplacementMap;
+uniform vec4 uMapScales[8];
+uniform int  uNumCascades;
 
 out float vDepth;
 
 void main() {
-    vec4 viewPos = uView * vec4(aPos, 1.0);
+    vec3 baseWorldPos = (uModel * vec4(aPos, 1.0)).xyz;
+    vec2 uv = baseWorldPos.xz;
+
+    vec3 camPos = vec3(inverse(uView)[3]);
+    float dist = length(uv - camPos.xz);
+    float distanceFactor = min(exp(-(dist - 150.0) * 0.007), 1.0);
+
+    vec3 displacement = vec3(0.0);
+    for (int i = 0; i < uNumCascades && i < 8; ++i) {
+        vec4 scales = uMapScales[i];
+        displacement += texture(uDisplacementMap, vec3(uv * scales.xy, float(i))).xyz * scales.z;
+    }
+    
+    vec3 displacedPos = baseWorldPos + displacement * distanceFactor;
+    vec4 viewPos = uView * vec4(displacedPos, 1.0);
     vDepth = -viewPos.z;
     gl_Position = uProjection * viewPos;
 }
@@ -328,50 +350,167 @@ void main() {
 
     public const string OCEAN_FRAG = @"
 #version 450 core
+#define PI 3.141592653589793
+#define REFLECTANCE 0.02
+
 in vec3 vWorldPos;
 in vec2 vUV;
-in float vFoam;
-in float vHeight;
-in vec3 vViewDir;
+in float vWaveHeight;
 
-uniform vec3 uWaterColor;
-uniform vec3 uFoamColor;
+// Material
+uniform vec3  uWaterColor;
+uniform vec3  uFoamColor;
+uniform float uRoughness;       // 0.0 - 1.0, default 0.4
+uniform float uNormalStrength;  // 0.0 - 1.0, default 1.0
+uniform float uSSSIntensity;    // SSS strength, default 1.0
+
+// Maps
 uniform sampler2DArray uNormalMap;
-uniform sampler2D uSkybox; 
-uniform vec3 uCameraPos;
+uniform sampler2D      uSkybox;
+
+// Scene
+uniform vec3  uCameraPos;
+uniform vec3  uLightDir;   // Direction TO light (normalized)
+uniform vec3  uLightColor;
+uniform float uLightIntensity;
+uniform mat4  uView;
+
+// Per-cascade scales
+uniform vec4 uMapScales[8];
+uniform int  uNumCascades;
 
 out vec4 FragColor;
 
+// --- Bicubic B-spline Filtering ---
+vec4 cubic_weights(float a) {
+    float a2 = a * a;
+    float a3 = a2 * a;
+    float w0 = -a3       + a2*3.0 - a*3.0 + 1.0;
+    float w1 =  a3*3.0   - a2*6.0          + 4.0;
+    float w2 = -a3*3.0   + a2*3.0 + a*3.0  + 1.0;
+    float w3 =  a3;
+    return vec4(w0, w1, w2, w3) / 6.0;
+}
+
+vec4 texture_bicubic(sampler2DArray sampler, vec3 uvw) {
+    vec2 dims = vec2(textureSize(sampler, 0).xy);
+    vec2 dims_inv = 1.0 / dims;
+    uvw.xy = uvw.xy * dims + 0.5;
+
+    vec2 fuv = fract(uvw.xy);
+    vec4 wx = cubic_weights(fuv.x);
+    vec4 wy = cubic_weights(fuv.y);
+
+    vec4 g = vec4(wx.xz + wx.yw, wy.xz + wy.yw);
+    vec4 h = (vec4(wx.yw, wy.yw) / g + vec4(-1.5, -1.5, 0.5, 0.5) + floor(uvw.xy).xxyy) * dims_inv.xxyy;
+    vec2 w = g.xz / (g.xz + g.yw);
+    return mix(
+        mix(texture(sampler, vec3(h.yw, uvw.z)), texture(sampler, vec3(h.xw, uvw.z)), w.x),
+        mix(texture(sampler, vec3(h.yz, uvw.z)), texture(sampler, vec3(h.xz, uvw.z)), w.x), w.y);
+}
+
+// --- GGX Microfacet Distribution ---
+float ggx_distribution(float cos_theta, float alpha) {
+    float a_sq = alpha * alpha;
+    float d = 1.0 + (a_sq - 1.0) * cos_theta * cos_theta;
+    return a_sq / (PI * d * d);
+}
+
+// --- Smith Masking-Shadowing ---
+float smith_masking(float cos_theta, float alpha) {
+    float a = cos_theta / (alpha * sqrt(1.0 - cos_theta * cos_theta + 1e-7));
+    float a_sq = a * a;
+    return a < 1.6 ? (1.0 - 1.259*a + 0.396*a_sq) / (3.535*a + 2.181*a_sq) : 0.0;
+}
+
+// --- Equirectangular skybox sample ---
+vec3 sampleSkybox(vec3 dir) {
+    const vec2 invAtan = vec2(0.1591, 0.3183);
+    vec2 uv = vec2(atan(dir.z, dir.x), asin(clamp(dir.y, -1.0, 1.0)));
+    uv *= invAtan;
+    uv.x += 0.5;
+    uv.y = 0.5 - uv.y;
+    return texture(uSkybox, uv).rgb;
+}
+
 void main() {
-    float gridScale = 0.05;
-    vec2 worldUV = vWorldPos.xz * gridScale;
-    
-    // Unpack normal from gradient map
-    vec4 nm = texture(uNormalMap, vec3(worldUV, 0.0));
-    vec3 N = normalize(vec3(nm.x, 2.0, nm.y)); // Enhanced shallowing for better reflections
-    
-    vec3 V = normalize(uCameraPos - vWorldPos);
-    vec3 L = normalize(vec3(0.5, 1.0, 0.3)); // Sun
-    
-    // Fresnel
-    float dotNV = max(dot(N, V), 0.0);
-    float fresnel = 0.04 + 0.96 * pow(1.0 - dotNV, 5.0);
-    
-    // Reflection
-    vec3 R = reflect(-V, N);
-    vec3 reflection = texture(uSkybox, R.xy * 0.5 + 0.5).rgb; // Mapping to 2D skybox for now
-    
-    // Deep water color
-    vec3 baseColor = mix(uWaterColor * 0.2, uWaterColor, clamp(vHeight * 0.5 + 0.5, 0.0, 1.0));
-    
-    vec3 color = mix(baseColor, reflection, fresnel * 0.8);
-    
-    // Foam (Whitecaps)
-    if (vFoam > 0.05) {
-        color = mix(color, uFoamColor, vFoam);
+    float dist = length(vWorldPos.xz - uCameraPos.xz);
+    float map_size = float(textureSize(uNormalMap, 0).x);
+
+    // -- Normal & Foam Accumulation (multi-cascade, mixed bicubic/bilinear) --
+    vec3 gradient = vec3(0.0);
+    for (int i = 0; i < uNumCascades && i < 8; ++i) {
+        vec4 scales = uMapScales[i];
+        vec3 coords = vec3(vUV * scales.xy, float(i));
+        float ppm = map_size * min(scales.x, scales.y);
+        // Mix bicubic and bilinear based on world-space pixel density
+        vec4 bicub = texture_bicubic(uNormalMap, coords);
+        vec4 bilin = texture(uNormalMap, coords);
+        vec4 nm = mix(bicub, bilin, min(1.0, ppm * 0.1));
+        gradient += nm.xyw * vec3(scales.ww, 1.0);
     }
-    
-    FragColor = vec4(color, 0.98);
+
+    // Foam factor from Jacobian (stored in gradient.z / accumulated alpha)
+    float foam_factor = smoothstep(0.0, 1.0, gradient.z * 0.75) * exp(-dist * 0.0075);
+
+    // Albedo
+    vec3 albedo = mix(uWaterColor, uFoamColor, foam_factor);
+
+    // Normal with distance-based strength falloff
+    float normalMix = mix(0.015, uNormalStrength, exp(-dist * 0.0175));
+    gradient.xy *= normalMix;
+    vec3 N = normalize(vec3(-gradient.x, 1.0, -gradient.y));
+
+    // Transform normal to view space for lighting, then back to world
+    vec3 V = normalize(uCameraPos - vWorldPos);
+    vec3 L = uLightDir;
+    vec3 H = normalize(L + V);
+
+    float dot_NV = max(dot(N, V), 2e-5);
+    float dot_NL = max(dot(N, L), 2e-5);
+    float dot_NH = max(dot(N, H), 0.0);
+
+    // -- Fresnel (Schlick with roughness-dependent power) --
+    float fresnel = mix(
+        pow(1.0 - dot_NV, 5.0 * exp(-2.69 * uRoughness)) / (1.0 + 22.7 * pow(uRoughness, 1.5)),
+        1.0, REFLECTANCE
+    );
+
+    // -- Roughness (foam increases roughness) --
+    float finalRoughness = (1.0 - fresnel) * foam_factor + uRoughness;
+
+    // -- Specular: GGX + Smith --
+    float light_mask = smith_masking(finalRoughness, dot_NV);
+    float view_mask = smith_masking(finalRoughness, dot_NL);
+    float D = ggx_distribution(dot_NH, finalRoughness);
+    float G = 1.0 / (1.0 + light_mask + view_mask);
+    vec3 specular = vec3(fresnel * D * G / (4.0 * dot_NV + 0.1)) * uLightColor * uLightIntensity;
+
+    // -- Diffuse with SSS --
+    const vec3 sss_modifier = vec3(0.9, 1.15, 0.85); // Greener sub-surface color
+    float sss_height = uSSSIntensity * max(0.0, vWaveHeight + 2.5)
+                     * pow(max(dot(L, -V), 0.0), 4.0)
+                     * pow(0.5 - 0.5 * dot(L, N), 3.0);
+    float sss_near = 0.5 * pow(dot_NV, 2.0);
+    float lambertian = 0.5 * dot_NL;
+    vec3 diffuse = mix(
+        (sss_height + sss_near) * sss_modifier / (1.0 + light_mask) + lambertian,
+        uFoamColor,
+        foam_factor
+    ) * (1.0 - fresnel) * uLightColor * uLightIntensity;
+
+    // -- Reflection via skybox --
+    vec3 R = reflect(-V, N);
+    vec3 skyReflection = sampleSkybox(R);
+
+    // -- Final Composition --
+    vec3 color = albedo * diffuse + specular + skyReflection * fresnel * 0.5;
+
+    // Tone mapping (ACES)
+    color = (color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14);
+    color = pow(color, vec3(1.0 / 2.2));
+
+    FragColor = vec4(color, 1.0);
 }
 ";
 

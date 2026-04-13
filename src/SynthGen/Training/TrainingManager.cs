@@ -29,6 +29,10 @@ public class TrainingManager
     public bool ResumeTraining { get; set; } = false;
     public string ProjectDir { get; set; } = "runs";
 
+    public bool GpuAvailable { get; private set; }
+    public bool IsPythonInstalled { get; private set; }
+    public bool IsYoloInstalled { get; private set; }
+
     // ── Read-only State ──
     public string CurrentEpochInfo { get; private set; } = "";
     public string BestWeightsPath { get; private set; } = "";
@@ -48,6 +52,91 @@ public class TrainingManager
     public string SelectedModelName => ModelSizes[ModelSizeIndex];
     public string SelectedTask => TaskTypes[TaskIndex];
     public string SelectedDevice => DeviceOptions[DeviceIndex];
+
+    public TrainingManager()
+    {
+        CheckEnvironment();
+    }
+
+    public void CheckEnvironment()
+    {
+        IsPythonInstalled = CheckCommand("python --version");
+        IsYoloInstalled = CheckCommand("yolo version");
+        GpuAvailable = CheckGpuAvailability();
+
+        if (!GpuAvailable && DeviceIndex == 0)
+        {
+            DeviceIndex = 1; // Switch to CPU if GPU not found
+        }
+    }
+
+    private bool CheckCommand(string cmd)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c {cmd}",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var p = Process.Start(psi);
+            p?.WaitForExit();
+            return p?.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    private bool CheckGpuAvailability()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "python.exe",
+                Arguments = "-c \"import torch; print(torch.cuda.is_available())\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var p = Process.Start(psi);
+            string output = p?.StandardOutput.ReadToEnd().Trim() ?? "False";
+            p?.WaitForExit();
+            return output == "True";
+        }
+        catch { return false; }
+    }
+
+    public void InstallDependencies()
+    {
+        if (Status == TrainStatus.Training) return;
+        
+        Status = TrainStatus.Preparing;
+        OnLog?.Invoke("[Training] Preparing to install dependencies (ultralytics, torch)...");
+        
+        new Thread(() => {
+            try {
+                // Install/Update ultralytics and common deps
+                var psi = new ProcessStartInfo {
+                    FileName = "cmd.exe",
+                    Arguments = "/c python -m pip install --upgrade ultralytics torch torchvision torchaudio",
+                    UseShellExecute = true, // Show window so user sees progress
+                    CreateNoWindow = false
+                };
+                var p = Process.Start(psi);
+                p?.WaitForExit();
+                
+                CheckEnvironment();
+                Status = TrainStatus.Idle;
+                OnLog?.Invoke("[Training] Environment check complete.");
+            } catch (Exception ex) {
+                Status = TrainStatus.Failed;
+                OnLog?.Invoke($"[Error] Installation failed: {ex.Message}");
+            }
+        }).Start();
+    }
 
     /// <summary>
     /// Start the training pipeline: prepare dataset, then launch YOLO.

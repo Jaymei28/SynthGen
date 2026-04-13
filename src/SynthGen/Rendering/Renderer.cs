@@ -183,17 +183,19 @@ public class Renderer : IDisposable
             _gl.DepthMask(true);
         }
 
+        // ── Ocean (opaque, with depth write) ──────────────────────────────
+        if (ocean.Config.Enabled && _oceanMesh != null)
+        {
+            _gl.Disable(EnableCap.CullFace); // See both sides of waves
+            DrawOcean(view, proj, cam, scene, ocean, time);
+            _gl.Enable(EnableCap.CullFace);
+        }
+
         // ── Transparent Pass ──────────────────────────────────────────────
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-        _gl.DepthMask(false); // Disable depth writing for transparents
-        _gl.Disable(EnableCap.CullFace); // See both sides of waves
-        
-        // Draw ocean
-        if (ocean.Config.Enabled && _oceanMesh != null)
-        {
-            DrawOcean(view, proj, cam, scene, ocean, time);
-        }
+        _gl.DepthMask(false);
+        _gl.Disable(EnableCap.CullFace);
 
         // Draw grid
         if (ShowSceneUI)
@@ -518,10 +520,47 @@ public class Renderer : IDisposable
         _oceanShader.SetMat4("uModel", Matrix4x4.Identity);
         _oceanShader.SetMat4("uView", view);
         _oceanShader.SetMat4("uProjection", proj);
-        _oceanShader.SetFloat("uTime", time);
+
+        // Material uniforms
         _oceanShader.SetVec3("uWaterColor", ocean.Config.WaterColor);
         _oceanShader.SetVec3("uFoamColor", ocean.Config.FoamColor);
+        _oceanShader.SetFloat("uRoughness", ocean.Config.Roughness);
+        _oceanShader.SetFloat("uNormalStrength", ocean.Config.NormalStrength);
+        _oceanShader.SetFloat("uSSSIntensity", ocean.Config.SSSIntensity);
         _oceanShader.SetVec3("uCameraPos", cam.Transform.Position);
+
+        // Find directional light from scene
+        Vector3 lightDir = Vector3.Normalize(new Vector3(-0.5f, -1f, -0.5f));
+        Vector3 lightColor = Vector3.One;
+        float lightIntensity = 1.0f;
+        foreach (var obj in scene.Objects)
+        {
+            var light = obj.GetComponent<LightComponent>();
+            if (light != null && light.LightType == LightType.Directional)
+            {
+                float yawRad = obj.Transform.Rotation.Y * MathF.PI / 180f;
+                float pitchRad = obj.Transform.Rotation.X * MathF.PI / 180f;
+                lightDir = new Vector3(
+                    MathF.Cos(pitchRad) * MathF.Sin(yawRad),
+                    MathF.Sin(pitchRad),
+                    MathF.Cos(pitchRad) * MathF.Cos(yawRad)
+                );
+                lightColor = light.Color;
+                lightIntensity = light.Intensity;
+                break;
+            }
+        }
+        _oceanShader.SetVec3("uLightDir", Vector3.Normalize(-lightDir)); // Direction TO light
+        _oceanShader.SetVec3("uLightColor", lightColor);
+        _oceanShader.SetFloat("uLightIntensity", lightIntensity);
+
+        // Per-cascade scales: (uvScaleX, uvScaleY, displacementScale, normalScale)
+        float tileX = ocean.Config.TileLength.X;
+        float tileY = ocean.Config.TileLength.Y;
+        float uvScaleX = 1.0f / tileX;
+        float uvScaleY = 1.0f / tileY;
+        _oceanShader.SetInt("uNumCascades", 1);
+        _oceanShader.SetVec4("uMapScales[0]", new Vector4(uvScaleX, uvScaleY, 1.0f, 1.0f));
 
         // Bind FFT Maps
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -531,7 +570,7 @@ public class Renderer : IDisposable
         _gl.ActiveTexture(TextureUnit.Texture1);
         _gl.BindTexture(TextureTarget.Texture2DArray, _waveGen.NormalMap);
         _oceanShader.SetInt("uNormalMap", 1);
-        
+
         // Bind Skybox for reflections
         _gl.ActiveTexture(TextureUnit.Texture2);
         _gl.BindTexture(TextureTarget.Texture2D, HdriTextureID);
@@ -544,14 +583,23 @@ public class Renderer : IDisposable
     {
         if (_oceanMesh == null) return;
         _oceanDepthShader.Use();
+        _oceanDepthShader.SetMat4("uModel", Matrix4x4.Identity);
         _oceanDepthShader.SetMat4("uView", view);
         _oceanDepthShader.SetMat4("uProjection", proj);
-        _oceanDepthShader.SetFloat("uTime", time);
-        _oceanDepthShader.SetFloat("uWindSpeed", ocean.Config.WindSpeed);
-        _oceanDepthShader.SetFloat("uWindDirection", ocean.Config.WindDirection);
-        _oceanDepthShader.SetFloat("uTimeMultiplier", ocean.Config.TimeScale);
         _oceanDepthShader.SetFloat("uNear", cam.NearPlane);
         _oceanDepthShader.SetFloat("uFar", cam.FarPlane);
+
+        // Per-cascade scales (same as DrawOcean)
+        float uvScaleX = 1.0f / ocean.Config.TileLength.X;
+        float uvScaleY = 1.0f / ocean.Config.TileLength.Y;
+        _oceanDepthShader.SetInt("uNumCascades", 1);
+        _oceanDepthShader.SetVec4("uMapScales[0]", new Vector4(uvScaleX, uvScaleY, 1.0f, 1.0f));
+
+        // Bind displacement map
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2DArray, _waveGen.DisplacementMap);
+        _oceanDepthShader.SetInt("uDisplacementMap", 0);
+
         _oceanMesh.Draw();
     }
 

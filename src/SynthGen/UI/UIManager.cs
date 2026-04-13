@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.IO;
 using System.Collections.Generic;
 using System.Numerics;
@@ -59,6 +60,7 @@ public class UIManager
     private bool _showTrainingPanel = false;
     private bool _showTrainingPrompt = false;
     private int _generatedImageCount = 0;
+    private bool _suppressObjectDelete;
 
     public UIManager(Application app)
     {
@@ -94,6 +96,7 @@ public class UIManager
 
         // Wire capture manager
         _app.CaptureManager.ActiveRandomizers = _allRandomizers;
+        _app.CaptureManager.HdriRandomizer = _allRandomizers.OfType<HDRIRandomizer>().FirstOrDefault();
         _app.CaptureManager.OnLog += msg => _logs.Add(msg);
         _app.TrainingManager.OnLog += msg => _logs.Add(msg);
 
@@ -101,6 +104,29 @@ public class UIManager
     }
 
     public void Render()
+    {
+        _suppressObjectDelete = false;
+
+
+
+        SetupDockspace();
+
+        RenderMenuBar();
+        RenderToolbar();
+        RenderSceneHierarchy();
+        RenderViewport();
+        RenderInspector();
+        RenderRandomizerPanel();
+        RenderOceanSettings();
+        RenderCapturePanel();
+        if (_showTrainingPanel) RenderTrainingPanel();
+        RenderTrainingPrompt();
+        RenderConsole();
+
+        HandleGlobalShortcuts();
+    }
+
+    private void HandleGlobalShortcuts()
     {
         // Global Shortcuts
         if (_app.Input.CtrlHeld && ImGui.IsKeyPressed(ImGuiKey.L))
@@ -138,7 +164,7 @@ public class UIManager
             var sel = _app.Scene.SelectedObject;
 
             // DELETE
-            if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Delete) && sel != null)
+            if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Delete) && sel != null && !_suppressObjectDelete)
             {
                 var target = sel;
                 var parent = target.Parent;
@@ -218,21 +244,6 @@ public class UIManager
                 AddLog("[UI] Randomized scene.");
             }
         }
-
-
-        SetupDockspace();
-
-        RenderMenuBar();
-        RenderToolbar();
-        RenderSceneHierarchy();
-        RenderViewport();
-        RenderInspector();
-        RenderRandomizerPanel();
-        RenderOceanSettings();
-        RenderCapturePanel();
-        if (_showTrainingPanel) RenderTrainingPanel();
-        RenderTrainingPrompt();
-        RenderConsole();
     }
 
     // ═══ Dockspace ═══════════════════════════════════════════════════════════
@@ -275,6 +286,17 @@ public class UIManager
         {
             if (ImGui.BeginMenu("File"))
             {
+                if (ImGui.MenuItem("Open Scenario..."))
+                {
+                    string? path = PickFileWithDialog("SynthGen Scenarios (*.json)|*.json|All files (*.*)|*.*");
+                    if (path != null) SceneSerializer.Load(_app.Scene, path, _app, AddLog);
+                }
+                if (ImGui.MenuItem("Save Scenario As..."))
+                {
+                    string? path = SaveFileWithDialog("SynthGen Scenarios (*.json)|*.json|All files (*.*)|*.*", "json");
+                    if (path != null) SceneSerializer.Save(_app.Scene, path);
+                }
+                ImGui.Separator();
                 if (ImGui.MenuItem("Exit")) Environment.Exit(0);
                 ImGui.EndMenu();
             }
@@ -1211,10 +1233,18 @@ public class UIManager
         if (clip.W <= 0) return false;
 
         Vector2 ndc = new Vector2(clip.X / clip.W, clip.Y / clip.W);
-        screenPos = _viewportScreenPos + new Vector2(
-            (ndc.X + 1) * 0.5f * _viewportSize.X,
-            (1 - ndc.Y) * 0.5f * _viewportSize.Y
-        );
+        float sx = (ndc.X + 1) * 0.5f * _viewportSize.X;
+        float sy = (1 - ndc.Y) * 0.5f * _viewportSize.Y;
+
+        // Apply Fisheye Warp for UI overlay
+        if (MathF.Abs(cam.FisheyeStrength) > 0.001f)
+        {
+            var warped = Annotation.KeypointAnnotator.WarpFisheye(new Vector2(sx, sy), (int)_viewportSize.X, (int)_viewportSize.Y, cam.FisheyeStrength);
+            sx = warped.X;
+            sy = warped.Y;
+        }
+
+        screenPos = _viewportScreenPos + new Vector2(sx, sy);
         return true;
     }
 
@@ -1371,6 +1401,15 @@ public class UIManager
             ImGui.SameLine();
             string albedoName = firstMr?.Material.AlbedoTexturePath != null ? Path.GetFileName(firstMr.Material.AlbedoTexturePath) : "None";
             if (ImGui.Button($"{albedoName}##Albedo", new Vector2(ImGui.GetContentRegionAvail().X - 60, 0))) { }
+            
+            // Allow clearing texture with Delete key when button is focused
+            if (ImGui.IsItemFocused() && _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Delete))
+            {
+                ApplyTextureRecursive(sel, 0, null, isAlbedo: true);
+                AddLog("[Material] Cleared Albedo texture");
+                _suppressObjectDelete = true;
+            }
+
             ImGui.SameLine();
             if (ImGui.Button("Browse##Albedo"))
             {
@@ -1395,6 +1434,15 @@ public class UIManager
             ImGui.SameLine();
             string normalName = firstMr?.Material.NormalTexturePath != null ? Path.GetFileName(firstMr.Material.NormalTexturePath) : "None";
             if (ImGui.Button($"{normalName}##Normal", new Vector2(ImGui.GetContentRegionAvail().X - 60, 0))) { }
+
+            // Allow clearing texture with Delete key when button is focused
+            if (ImGui.IsItemFocused() && _app.Input.WasKeyJustPressed(Silk.NET.Input.Key.Delete))
+            {
+                ApplyTextureRecursive(sel, 0, null, isAlbedo: false);
+                AddLog("[Material] Cleared Normal texture");
+                _suppressObjectDelete = true;
+            }
+
             ImGui.SameLine();
             if (ImGui.Button("Browse##Normal"))
             {
@@ -1603,7 +1651,7 @@ public class UIManager
             }
 
             // Bone picker dropdown — get all bones from the skeleton
-            var rootMr = FindFirstMeshRenderer(kpRoot);
+            var rootMr = FindFirstSkinnedMeshRenderer(kpRoot);
             if (rootMr?.Mesh?.Skeleton != null)
             {
                 var boneNames = new List<string> { "(none)" };
@@ -2105,6 +2153,33 @@ public class UIManager
             ImGui.TextWrapped(tm.CurrentEpochInfo);
         }
 
+        // ── Environment Status ──
+        ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f), "Environment Readiness");
+        
+        ImGui.Text("Python:"); ImGui.SameLine(100);
+        ImGui.TextColored(tm.IsPythonInstalled ? new Vector4(0.3f, 1f, 0.5f, 1f) : new Vector4(1, 0.3f, 0.3f, 1f), tm.IsPythonInstalled ? "OK" : "MISSING");
+
+        ImGui.Text("YOLOv8:"); ImGui.SameLine(100);
+        ImGui.TextColored(tm.IsYoloInstalled ? new Vector4(0.3f, 1f, 0.5f, 1f) : new Vector4(1, 0.3f, 0.3f, 1f), tm.IsYoloInstalled ? "OK" : "MISSING");
+
+        ImGui.Text("CUDA:"); ImGui.SameLine(100);
+        ImGui.TextColored(tm.GpuAvailable ? new Vector4(0.3f, 1f, 0.5f, 1f) : new Vector4(0.6f, 0.6f, 0.6f, 1f), tm.GpuAvailable ? "AVAILABLE" : "NOT FOUND (CPU ONLY)");
+
+        if (!tm.IsPythonInstalled || !tm.IsYoloInstalled)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.8f, 0.4f, 0.1f, 1.0f));
+            if (ImGui.Button("🔧 Setup Python Environment", new Vector2(-1, 0)))
+            {
+                tm.InstallDependencies();
+            }
+            ImGui.PopStyleColor();
+            ImGui.TextWrapped("Click above to install required Python packages (Ultralytics & Torch).");
+        }
+        else
+        {
+            if (ImGui.Button("Re-check Environment")) tm.CheckEnvironment();
+        }
+
         ImGui.Separator();
 
         // ── Model Configuration ──
@@ -2119,8 +2194,13 @@ public class UIManager
             tm.TaskIndex = taskIdx;
 
         int deviceIdx = tm.DeviceIndex;
-        if (ImGui.Combo("Device", ref deviceIdx, "GPU (0)\0CPU\0"))
-            tm.DeviceIndex = deviceIdx;
+        string[] items = tm.GpuAvailable ? new[] { "GPU (0)", "CPU" } : new[] { "(No GPU)", "CPU" };
+        if (ImGui.Combo("Device", ref deviceIdx, string.Join("\0", items) + "\0"))
+        {
+            if (tm.GpuAvailable || deviceIdx == 1) // Only allow 0 if GPU is available
+                tm.DeviceIndex = deviceIdx;
+        }
+        if (!tm.GpuAvailable && tm.DeviceIndex == 0) tm.DeviceIndex = 1;
 
         ImGui.Separator();
 
@@ -2167,6 +2247,9 @@ public class UIManager
         ImGui.Separator();
 
         // ── Action Buttons ──
+        bool canTrain = tm.IsPythonInstalled && tm.IsYoloInstalled;
+        if (!canTrain) ImGui.BeginDisabled();
+        
         if (!tm.IsTraining)
         {
             if (ImGui.Button("🚀 Start Training", new Vector2(-1, 35)))
@@ -2181,6 +2264,12 @@ public class UIManager
             {
                 tm.StopTraining();
             }
+        }
+
+        if (!canTrain)
+        {
+            ImGui.EndDisabled();
+            ImGui.TextColored(new Vector4(1, 0.8f, 0.3f, 1), "Setup environment above to enable training.");
         }
 
         // ── Results ──
@@ -2243,6 +2332,7 @@ public class UIManager
             _ => Rendering.Mesh.CreateCube(_app.GL)
         };
         obj.AddComponent(mr);
+    obj.AssetPath = $"primitive:{type}";
 
         _app.Scene.AddObject(obj);
         _app.Scene.SelectedObject = obj;
@@ -2253,6 +2343,7 @@ public class UIManager
     {
         var root = _app.AssetManager.ImportModelHierarchical(path, AddLog);
         if (root == null) return;
+    root.AssetPath = path;
  
         // Auto-labeling DISABLED. Users must manually add labels via the Inspector.
         // This prevents character models from exploding with 100+ unwanted labels on bones.
@@ -2416,7 +2507,37 @@ public class UIManager
         }
     }
 
-    private void ApplyTextureRecursive(SceneObject obj, uint texId, string texPath, bool isAlbedo)
+    private string? SaveFileWithDialog(string filter, string defaultExt)
+    {
+        AddLog("[Scenario] Opening save dialog...");
+        try
+        {
+            string command = $"Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.SaveFileDialog; $f.Filter = '{filter}'; $f.DefaultExt = '{defaultExt}'; $f.Title = 'Save Scenario'; if($f.ShowDialog() -eq 'OK') {{ $f.FileName }}";
+
+            var process = new System.Diagnostics.Process();
+            process.StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            process.Start();
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit();
+            
+            if (string.IsNullOrEmpty(output)) return null;
+            return output;
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[Error] Failed to open save dialog: {ex.Message}");
+            return null;
+        }
+    }
+
+    private void ApplyTextureRecursive(SceneObject obj, uint texId, string? texPath, bool isAlbedo)
     {
         var mr = obj.GetComponent<MeshRendererComponent>();
         if (mr != null)
@@ -2455,6 +2576,24 @@ public class UIManager
         {
             var childMr = FindFirstMeshRenderer(child);
             if (childMr != null) return childMr;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the first MeshRendererComponent with a valid skeleton in the hierarchy.
+    /// Used for bone binding dropdowns so all imported animated models show their bones.
+    /// </summary>
+    private MeshRendererComponent? FindFirstSkinnedMeshRenderer(SceneObject obj)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr?.Mesh != null && mr.Mesh.HasSkinning && mr.Mesh.Skeleton != null)
+            return mr;
+
+        foreach (var child in obj.Children)
+        {
+            var found = FindFirstSkinnedMeshRenderer(child);
+            if (found != null) return found;
         }
         return null;
     }
@@ -2653,10 +2792,12 @@ public class UIManager
         }
 
         // Try to auto-map bones for binding using the chosen standard
+        // Use skinned mesh specifically so we find the skeleton on any model
         Dictionary<int, string>? boneMapping = null;
-        if (mr?.Mesh?.Skeleton != null)
+        var skinnedMr = FindFirstSkinnedMeshRenderer(parent);
+        if (skinnedMr?.Mesh?.Skeleton != null)
         {
-            boneMapping = Annotation.KeypointRegistry.AutoMapBones(std, mr.Mesh.Skeleton.BonesByName.Keys);
+            boneMapping = Annotation.KeypointRegistry.AutoMapBones(std, skinnedMr.Mesh.Skeleton.BonesByName.Keys);
             if (boneMapping.Count > 0)
                 AddLog($"[Pose] Auto-bound {boneMapping.Count}/{std.Keypoints.Count} keypoints to skeleton bones using {std.Name} standard");
         }

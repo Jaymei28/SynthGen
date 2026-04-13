@@ -38,13 +38,12 @@ public class SceneGraph
         SelectedObjects.Remove(obj);
         if (SelectedObject == obj) SelectedObject = null;
         
+        // Always remove from flat list so it stops rendering
+        _objects.Remove(obj);
+        
         if (obj.Parent != null)
         {
             obj.Parent.Children.Remove(obj);
-        }
-        else
-        {
-            _objects.Remove(obj);
         }
         
         foreach (var child in obj.Children.ToList()) 

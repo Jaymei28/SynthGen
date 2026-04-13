@@ -8,6 +8,7 @@ namespace SynthGen.Scene;
 public class SceneObject
 {
     public string Name { get; set; }
+    public string? AssetPath { get; set; }
     public Transform Transform { get; set; } = new();
     public bool IsSelected { get; set; }
     public SceneObject? Parent { get; set; }

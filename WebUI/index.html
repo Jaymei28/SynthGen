@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SynthGen Headless Configurator</title>
+    <!-- Modern Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./style.css">
+  </head>
+<body>
+    <!-- HEADER -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 7.7V16.3L12 22L22 16.3V7.7L12 2Z" stroke="#10b981" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M12 2L12 12M12 12L2 7.7M12 12L22 7.7" stroke="#10b981" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="title-group">
+          <h1>HEADLESS <span>SYNTHGEN</span></h1>
+          <sub>Synthetic Data Generator</sub>
+        </div>
+      </div>
+      <div class="header-center">
+        <div class="pill bg-green-dark text-green"><span class="dot"></span> HEADLESS MODE</div>
+        <div class="pill border-purple text-purple">SCHEMA v1.3.0</div>
+      </div>
+      <div class="header-right">
+        <button class="btn btn-outline">LOAD CONFIG</button>
+        <button class="btn btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 5V19L19 12L8 5Z"/>
+          </svg>
+          GENERATE DATASET
+        </button>
+      </div>
+    </header>
+
+    <!-- TABS -->
+    <div class="tabs-container">
+      <div class="tabs">
+        <button class="tab active">CONFIGURE</button>
+        <button class="tab">JOBS</button>
+      </div>
+    </div>
+
+    <!-- MAIN LAYOUT -->
+    <main class="app-main">
+      <!-- LEFT COLUMN -->
+      <aside class="sidebar">
+        <!-- Panel 1: Scene & HDRI -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-icon icon-blue">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            </div>
+            <div class="panel-title">
+              <h2>SCENE & HDRI</h2>
+              <p>Environment and lighting</p>
+            </div>
+            <div class="caret">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+            </div>
+          </div>
+          <div class="panel-content">
+            <div class="form-row two-col">
+              <div class="form-group">
+                <label>Scene Category</label>
+                <select class="input"><option>Warehouse</option><option>City</option></select>
+                <div class="input-hint">Filters suitable HDRIs & asset presets</div>
+              </div>
+              <div class="form-group">
+                <label>HDRI Selection</label>
+                <select class="input"><option>Auto (Random from Category)</option></select>
+                <div class="input-hint">Automatically selects and randomizes HDRI</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="label-row">
+                <label>HDRI Intensity</label>
+                <span class="value-display">1.20</span>
+              </div>
+              <div class="slider-group">
+                <span class="range-min">0.1</span>
+                <input type="range" min="0.1" max="5.0" step="0.1" value="1.2" />
+                <span class="range-max">5.0</span>
+              </div>
+            </div>
+            <div class="form-group mt-2">
+              <div class="label-row">
+                <label>HDRI Rotation (Z)</label>
+                <span class="value-display">137°</span>
+              </div>
+              <div class="slider-group">
+                <span class="range-min">0°</span>
+                <input type="range" min="0" max="360" value="137" />
+                <span class="range-max">360°</span>
+              </div>
+            </div>
+            <div class="form-row mt-3">
+              <label>Randomize HDRI Saturation</label>
+              <label class="switch"><input type="checkbox" checked><span class="slider round"></span></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 2: Camera -->
+        <div class="panel mt-4">
+          <div class="panel-header">
+            <div class="panel-icon icon-blue">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            </div>
+            <div class="panel-title">
+              <h2>CAMERA</h2>
+              <p>Projection and positioning</p>
+            </div>
+            <div class="caret">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+            </div>
+          </div>
+          <div class="panel-content">
+            <div class="form-group">
+              <label>Camera Type</label>
+              <div class="segmented-control">
+                <button>Landscape</button>
+                <button class="active">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Fisheye
+                </button>
+              </div>
+            </div>
+            <div class="form-group mt-3">
+              <div class="label-row">
+                <label>FOV / Fisheye FOV</label>
+                <span class="value-display">180°</span>
+              </div>
+              <div class="slider-group">
+                <span class="range-min">60°</span>
+                <input type="range" min="60" max="180" step="1" value="180" />
+                <span class="range-max">180°</span>
+              </div>
+            </div>
+            <div class="form-row two-col mt-4">
+              <div class="form-group">
+                <label>Resolution</label>
+                <select class="input mt-1"><option>1280 x 720 (16:9)</option></select>
+              </div>
+              <div class="toggles-col">
+                <div class="toggle-row">
+                  <label>Random Position</label>
+                  <label class="switch"><input type="checkbox" checked><span class="slider round"></span></label>
+                </div>
+                <div class="toggle-row">
+                  <label>Random Look At</label>
+                  <label class="switch"><input type="checkbox" checked><span class="slider round"></span></label>
+                </div>
+                <div class="toggle-row">
+                  <label>Depth of Field</label>
+                  <label class="switch"><input type="checkbox"><span class="slider round"></span></label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Additional Panels simplified for demo -->
+        <!-- Assets & Population -->
+        <div class="panel mt-4">
+          <div class="panel-header">
+            <div class="panel-icon icon-green">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+            </div>
+            <div class="panel-title"><h2>ASSETS & POPULATION</h2><p>Objects and placement</p></div>
+            <div class="caret"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg></div>
+          </div>
+          <div class="panel-content">
+             <div class="form-group">
+              <div class="label-row"><label>Vehicles</label><span class="value-display bg-darker">6</span></div>
+              <div class="slider-group"><span class="range-min">0 - 20</span><input type="range" class="c-green" min="0" max="20" value="6" /></div>
+            </div>
+            <div class="form-group mt-2">
+               <div class="label-row"><label>People</label><span class="value-display bg-darker">18</span></div>
+               <div class="slider-group"><span class="range-min">0 - 50</span><input type="range" class="c-green" min="0" max="50" value="18" /></div>
+            </div>
+            <div class="form-group mt-2 mb-4">
+               <div class="label-row"><label>Props</label><span class="value-display bg-darker">42</span></div>
+               <div class="slider-group"><span class="range-min">0 - 200</span><input type="range" class="c-green" min="0" max="200" value="42" /></div>
+            </div>
+          </div>
+        </div>
+
+      </aside>
+
+      <!-- RIGHT COLUMN -->
+      <section class="main-content">
+        
+        <!-- JSON Editor -->
+        <div class="panel flex-fill">
+          <div class="panel-header border-bottom">
+            <h2>ACTIVE CONFIG (JSON)</h2>
+            <button class="btn btn-text text-blue">COPY</button>
+          </div>
+          <div class="editor-container">
+<pre><code><span class="punct">{</span>
+  <span class="key">"scene"</span><span class="punct">:</span> <span class="punct">{</span>
+    <span class="key">"type"</span><span class="punct">:</span> <span class="string">"warehouse"</span><span class="punct">,</span>
+    <span class="key">"hdri"</span><span class="punct">:</span> <span class="punct">{</span>
+      <span class="key">"mode"</span><span class="punct">:</span> <span class="string">"auto"</span><span class="punct">,</span>
+      <span class="key">"intensity"</span><span class="punct">:</span> <span class="number">1.2</span><span class="punct">,</span>
+      <span class="key">"rotation_z"</span><span class="punct">:</span> <span class="number">137</span><span class="punct">,</span>
+      <span class="key">"randomize_saturation"</span><span class="punct">:</span> <span class="boolean">true</span>
+    <span class="punct">}</span>
+  <span class="punct">},</span>
+  <span class="key">"camera"</span><span class="punct">:</span> <span class="punct">{</span>
+    <span class="key">"type"</span><span class="punct">:</span> <span class="string">"fisheye"</span><span class="punct">,</span>
+    <span class="key">"fov"</span><span class="punct">:</span> <span class="number">180</span><span class="punct">,</span>
+    <span class="key">"resolution"</span><span class="punct">:</span> <span class="punct">[</span><span class="number">1280</span><span class="punct">,</span> <span class="number">720</span><span class="punct">],</span>
+    <span class="key">"random_position"</span><span class="punct">:</span> <span class="boolean">true</span>
+  <span class="punct">}</span>
+<span class="punct">}</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Bottom Grid: Pipeline and Logs -->
+        <div class="bottom-grid">
+          
+          <!-- Pipeline -->
+          <div class="panel">
+            <div class="panel-header border-bottom">
+              <h2>GENERATION PIPELINE</h2>
+            </div>
+            <div class="pipeline-list">
+              <div class="pipeline-step done">
+                <div class="step-num">1</div>
+                <div class="step-text">
+                  <h3>VALIDATING CONFIG</h3>
+                  <p>Schema validation passed</p>
+                </div>
+                <div class="step-status text-green"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> DONE</div>
+              </div>
+              <div class="pipeline-step done">
+                <div class="step-num">2</div>
+                <div class="step-text">
+                  <h3>PREPARING ASSETS</h3>
+                  <p>Loading GLB assets and HDRIs...</p>
+                </div>
+                <div class="step-status text-green"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> DONE</div>
+              </div>
+              <div class="pipeline-step active">
+                <div class="step-num">3</div>
+                <div class="step-text">
+                  <h3>GENERATING SCENES</h3>
+                  <p>Rendering 1,000 images headlessly...</p>
+                </div>
+                <div class="step-status text-blue">RUNNING <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg></div>
+              </div>
+              <div class="pipeline-step pending">
+                <div class="step-num">4</div>
+                <div class="step-text">
+                  <h3>ANNOTATING</h3>
+                  <p>Generating COCO and YOLO labels</p>
+                </div>
+                <div class="step-status">PENDING</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Logs -->
+          <div class="panel">
+            <div class="panel-header border-bottom">
+              <h2>LOGS</h2>
+              <button class="btn btn-text text-blue">VIEW FULL LOG</button>
+            </div>
+            <div class="logs-container">
+              <div class="log-line"><span class="time">14:32:10</span> <span class="level text-green">[INFO]</span> Headless SynthGen started</div>
+              <div class="log-line"><span class="time">14:32:10</span> <span class="level text-green">[INFO]</span> Using Blender 4.1.0 (headless)</div>
+              <div class="log-line"><span class="time">14:32:11</span> <span class="level text-green">[INFO]</span> Loaded 127 assets, 48 HDRIs</div>
+              <div class="log-line"><span class="time">14:32:12</span> <span class="level text-green">[INFO]</span> Scene category: warehouse</div>
+              <div class="log-line"><span class="time">14:32:14</span> <span class="level text-green">[INFO]</span> Output directory: /datasets/warehouse_run_001</div>
+              <div class="log-line"><span class="time">14:32:15</span> <span class="level text-green">[INFO]</span> Starting generation (1,000 images)...</div>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

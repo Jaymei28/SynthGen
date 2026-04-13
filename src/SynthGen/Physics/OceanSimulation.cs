@@ -46,6 +46,11 @@ public class OceanConfig
     // ── Buoyancy (Hidden/Internal Physics) ──
     public float BuoyancyForce = 80.0f;
     public float BuoyancyDamping = 12.0f;
+
+    // ── Rendering (Atlas GDC BSDF) ──
+    public float Roughness = 0.4f;
+    public float NormalStrength = 1.0f;
+    public float SSSIntensity = 1.0f;
 }
 
 /// <summary>

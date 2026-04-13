@@ -28,7 +28,7 @@ shader_error.log
 !/src/SynthGen/Randomizers/**
 !/src/SynthGen/UI/**
 !/src/SynthGen/Program.cs
-!/src/SynthGen/App/**
+!/src/SynthGen/App/**      
 !/src/SynthGen/Capture/**
 !/src/SynthGen/Rendering/**
 !/src/SynthGen/Scene/**

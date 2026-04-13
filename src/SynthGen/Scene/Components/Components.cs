@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace SynthGen.Scene.Components;
 
@@ -25,13 +26,18 @@ public class LabelComponent
     public Vector3 SegmentationColor = new(1, 0, 0); // unique flat color
     public int InstanceID;  // auto-assigned
 
+    [JsonIgnore]
     private static int _nextInstanceID = 1;
+    
+    public static void ResetInstanceCounter() => _nextInstanceID = 1;
+
     public LabelComponent() { InstanceID = _nextInstanceID++; }
 }
 
 // ── Mesh Renderer ──────────────────────────────────────────────────────────
 public class MeshRendererComponent
 {
+    [JsonIgnore]
     public Rendering.Mesh? Mesh;
     public Rendering.Material Material = new();
     public bool Visible = true;
