@@ -92,6 +92,37 @@ public class CaptureManager
 
         _cocoExporter = new Annotation.COCOExporter();
 
+        // Ensure unique segmentation colors for all labeled objects 
+        var usedColors = new HashSet<uint>();
+        var colorRng = new Random(RandomSeed);
+        int fixedColors = 0;
+        int labeledFound = 0;
+        
+        foreach (var obj in _scene.Objects)
+        {
+            var label = obj.GetComponent<LabelComponent>();
+            if (label == null) continue;
+            labeledFound++;
+
+            uint colorKey = ((uint)(label.SegmentationColor.X * 255) << 16) |
+                             ((uint)(label.SegmentationColor.Y * 255) << 8) |
+                              (uint)(label.SegmentationColor.Z * 255);
+
+            if (usedColors.Contains(colorKey) || colorKey == 0)
+            {
+                Vector3 newColor;
+                do {
+                    newColor = new Vector3(colorRng.Next(5, 250) / 255f, colorRng.Next(5, 250) / 255f, colorRng.Next(5, 250) / 255f);
+                    colorKey = ((uint)(newColor.X * 255) << 16) | ((uint)(newColor.Y * 255) << 8) | (uint)(newColor.Z * 255);
+                } while (usedColors.Contains(colorKey));
+                
+                label.SegmentationColor = newColor;
+                fixedColors++;
+            }
+            usedColors.Add(colorKey);
+        }
+        OnLog?.Invoke($"[Capture] Found {labeledFound} labeled objects. Assigned {usedColors.Count} unique tracking colors.");
+
         // Register categories from scene labels
         foreach (var obj in _scene.Objects)
         {
@@ -150,6 +181,7 @@ public class CaptureManager
                 randomizer.Randomize(_scene, rng);
         }
 
+        float timeStep = 0.1f;
         if (AnimatedCapture)
         {
             // Animated mode: capture multiple sub-frames per iteration
@@ -158,15 +190,16 @@ public class CaptureManager
 
             for (int sf = 0; sf < subFrames; sf++)
             {
-                float animTime = sf * stepTime;
+                // Cumulative time across iterations + sub-frames
+                float animTime = (CompletedFrames * timeStep) + (sf * stepTime);
 
                 // Advance all animation players to this time
                 foreach (var obj in _scene.Objects)
                 {
                     var anim = obj.GetComponent<Scene.Components.AnimationPlayerComponent>();
-                    if (anim != null)
+                    if (anim != null && anim.IsPlaying)
                     {
-                        anim.PlaybackTime = animTime;
+                        anim.PlaybackTime = animTime % Math.Max(0.1f, anim.ClipDurationSeconds);
                     }
                 }
 
@@ -176,7 +209,6 @@ public class CaptureManager
                     UpdateBoneKeypointPositions();
 
                 // Re-render the scene at this animation pose
-                // (The renderer will pick up updated bone poses from the animation player)
                 _renderer.RenderScene(_scene, _ocean, totalTime + animTime);
                 
                 CaptureFrame(_totalCapturedImages);
@@ -185,6 +217,15 @@ public class CaptureManager
         }
         else
         {
+            foreach (var obj in _scene.Objects)
+            {
+                var anim = obj.GetComponent<Scene.Components.AnimationPlayerComponent>();
+                if (anim != null && anim.IsPlaying)
+                {
+                    anim.PlaybackTime = (CompletedFrames * timeStep) % Math.Max(0.1f, anim.ClipDurationSeconds);
+                }
+            }
+
             // Update bone-bound keypoint positions BEFORE capture
             // so they reflect the current frame's bone transforms
             if (ExportKeypointPose)
@@ -375,7 +416,7 @@ public class CaptureManager
                     Array.Copy(pixelsCopy, (height - 1 - y) * rowSize, flipped, y * rowSize, rowSize);
                 }
 
-                using var img = Image.LoadPixelData<Rgba32>(flipped, width, height);
+                using var img = SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(flipped, width, height);
                 img.SaveAsPng(path);
             }
             catch (Exception ex)

@@ -142,3 +142,29 @@ public class DepthScaleComponent
     public float FarScale = 0.3f;
     public float ReferenceDistance = 10f;
 }
+
+public class MaterialRandomizerComponent
+{
+    public bool Enabled = true;
+    public bool RandomizeColor = true;
+    public bool RandomizeTexture = false;
+    public bool RandomizeEmissive = false;
+    
+    // Limits
+    public float MinBrightness = 0.2f;
+    public float MaxBrightness = 1.0f;
+    public float MinEmissive = 1.0f;
+    public float MaxEmissive = 5.0f;
+    
+    // New: Palette support
+    public bool UsePalette = false;
+    public List<Vector4> ColorPalette = new() { new Vector4(1,0,0,1), new Vector4(0,1,0,1), new Vector4(0,0,1,1) };
+    public int SelectedColorIndex = 0;
+
+    // Selection & Local Pool
+    public string? SelectedTexturePath;
+    public List<string> LocalTexturePool = new();
+
+    // Filter by material name? (Empty = all)
+    public string MaterialNameFilter = "";
+}

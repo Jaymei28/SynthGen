@@ -21,13 +21,21 @@ namespace SynthGen.UI;
 /// </summary>
 public class UIManager
 {
-    private readonly Application _app;
+    private readonly SynthGen.App.Application _app;
 
     // All randomizers
     private readonly List<RandomizerBase> _allRandomizers;
     public IReadOnlyList<RandomizerBase> AllRandomizers => _allRandomizers;
 
-    // Console log
+    public void UpdateRandomizer(int index, RandomizerBase newRandomizer)
+    {
+        if (index >= 0 && index < _allRandomizers.Count)
+        {
+            _allRandomizers[index] = newRandomizer;
+        }
+    }
+
+    private string _customObjName = "NewObject";
     private readonly List<string> _logs = new();
 
     // Viewport state
@@ -62,7 +70,7 @@ public class UIManager
     private int _generatedImageCount = 0;
     private bool _suppressObjectDelete;
 
-    public UIManager(Application app)
+    public UIManager(SynthGen.App.Application app)
     {
         _app = app;
 
@@ -74,6 +82,7 @@ public class UIManager
             new RotationRandomizer { Enabled = true },
             new ScaleRandomizer { Enabled = true },
             new TextureRandomizer(),
+            new MaterialRandomizer { Enabled = true },
             new DepthScaleMapper(),
             // Camera
             new CameraPositionRandomizer(),
@@ -93,6 +102,7 @@ public class UIManager
         };
 
         RefreshHDRIs();
+        RefreshTexturePools();
 
         // Wire capture manager
         _app.CaptureManager.ActiveRandomizers = _allRandomizers;
@@ -289,12 +299,12 @@ public class UIManager
                 if (ImGui.MenuItem("Open Scenario..."))
                 {
                     string? path = PickFileWithDialog("SynthGen Scenarios (*.json)|*.json|All files (*.*)|*.*");
-                    if (path != null) SceneSerializer.Load(_app.Scene, path, _app, AddLog);
+                    if (path != null) SceneSerializer.Load(_app.Scene, path, _app, this, AddLog);
                 }
                 if (ImGui.MenuItem("Save Scenario As..."))
                 {
                     string? path = SaveFileWithDialog("SynthGen Scenarios (*.json)|*.json|All files (*.*)|*.*", "json");
-                    if (path != null) SceneSerializer.Save(_app.Scene, path);
+                    if (path != null) SceneSerializer.Save(_app, this, path);
                 }
                 ImGui.Separator();
                 if (ImGui.MenuItem("Exit")) Environment.Exit(0);
@@ -627,16 +637,18 @@ public class UIManager
             drawList.AddRectFilled(pos + new Vector2(0, 30), pos + new Vector2(size.X + 20, 60), ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f)));
             drawList.AddText(pos + new Vector2(10, 35), ImGui.GetColorU32(new Vector4(1, 1, 0, 1)), msg);
         }
-        // ── Keypoint Skeleton Overlay ──
-        var selObj = _app.Scene.SelectedObject;
-        if (selObj != null)
+        // ── Keypoint Skeleton Overlay (When NOT generating, show for selection) ──
+        if (!_app.CaptureManager.IsGenerating)
         {
-            // Check if selected object or its parent root has keypoints
-            var kpRoot = selObj;
-            while (kpRoot.Parent != null) kpRoot = kpRoot.Parent;
-            if (CountKeypointChildren(kpRoot) > 0)
+            var selObj = _app.Scene.SelectedObject;
+            if (selObj != null)
             {
-                DrawKeypointOverlay(kpRoot);
+                var kpRoot = selObj;
+                while (kpRoot.Parent != null) kpRoot = kpRoot.Parent;
+                if (CountKeypointChildren(kpRoot) > 0)
+                {
+                    DrawKeypointOverlay(kpRoot);
+                }
             }
         }
 
@@ -1105,85 +1117,118 @@ public class UIManager
             var label = obj.GetComponent<LabelComponent>();
             if (label == null) continue;
 
-            // --- Skeleton Bone Filtering ---
-            // If an ancestor already has a label, skip it to avoid clutter.
+            /* 
+            // Removed to avoid skipping boxes for nested labels
             bool ancestorLabeled = false;
             var p = obj.Parent;
             while (p != null) { if (p.HasComponent<LabelComponent>()) { ancestorLabeled = true; break; } p = p.Parent; }
             if (ancestorLabeled) continue;
+            */
 
             // --- Find All Meshes ---
             var relevantMeshes = new List<(SceneObject o, Rendering.Mesh m)>();
             FindMeshesInGroup(obj, (o, m) => relevantMeshes.Add((o, m)));
 
-            // --- Compute Target Position (Top-Center of group) ---
-            Vector3 centerSum = Vector3.Zero;
-            float highestY = -1000f;
+            // --- Compute Collective Bounding Box in obj-local space ---
+            Vector3 collectiveMin = new Vector3(float.MaxValue);
+            Vector3 collectiveMax = new Vector3(float.MinValue);
+            Matrix4x4 rootWorld = obj.GetWorldMatrix();
+            Matrix4x4.Invert(rootWorld, out var invRoot);
+
             foreach (var (mObj, mesh) in relevantMeshes)
             {
+                var mrComp = mObj.GetComponent<MeshRendererComponent>();
+                if (mrComp != null && !mrComp.Visible) continue; // Skip hidden collision boxes
+                
                 var model = mObj.GetWorldMatrix();
-                if (mesh.HasSkinning && mesh.Skeleton != null && mesh.PrimaryBoneIndex >= 0)
+                
+                if (mesh.HasSkinning && mesh.Skeleton != null)
                 {
-                    var boneMats = mesh.Skeleton.GetFinalMatrices();
-                    if (mesh.PrimaryBoneIndex < boneMats.Length)
-                        model = boneMats[mesh.PrimaryBoneIndex] * model;
+                    // Use more precise joint-based bounds calculation
+                    var skeleton = mesh.Skeleton;
+                    foreach (var bone in skeleton.Bones)
+                    {
+                        // Filter out non-body helper bones that often stretch the box to the model origin
+                        string name = bone.Name.ToLower();
+                        if (name.Contains("root") || name.Contains("armature") || 
+                            name.Contains("pivot") || name.Contains("helper") || 
+                            name.Contains("attach") || name.Contains("target")) 
+                            continue;
+
+                        // Match the logic in Application.UpdateBoneKeypointPositions for consistency
+                        var boneInModel = bone.GlobalTransform * skeleton.GlobalInverseTransform;
+                        var jointWorld = boneInModel * model;
+                        var pLocal = Vector3.Transform(Vector3.Zero, jointWorld * invRoot);
+                        
+                        collectiveMin = Vector3.Min(collectiveMin, pLocal);
+                        collectiveMax = Vector3.Max(collectiveMax, pLocal);
+                    }
+                    
+                    // Add 5cm padding (tighter than before)
+                    collectiveMin -= new Vector3(0.05f);
+                    collectiveMax += new Vector3(0.05f);
                 }
-                centerSum += model.Translation;
-                highestY = MathF.Max(highestY, model.Translation.Y + 1.2f); // Offset to head height
-                DrawOriented3DBox(mObj, mesh, label.SegmentationColor);
+                else
+                {
+                    var modelInRoot = model * invRoot;
+                    Vector3 mMin = mesh.BoundingBoxMin;
+                    Vector3 mMax = mesh.BoundingBoxMax;
+                    Vector3[] corners = {
+                        new(mMin.X, mMin.Y, mMin.Z), new(mMax.X, mMin.Y, mMin.Z),
+                        new(mMax.X, mMax.Y, mMin.Z), new(mMin.X, mMax.Y, mMin.Z),
+                        new(mMin.X, mMin.Y, mMax.Z), new(mMax.X, mMin.Y, mMax.Z),
+                        new(mMax.X, mMax.Y, mMax.Z), new(mMin.X, mMax.Y, mMax.Z)
+                    };
+                    foreach(var c in corners) {
+                        var pLocal = Vector3.Transform(c, modelInRoot);
+                        collectiveMin = Vector3.Min(collectiveMin, pLocal);
+                        collectiveMax = Vector3.Max(collectiveMax, pLocal);
+                    }
+                }
             }
 
-            Vector3 labelWorldPos = relevantMeshes.Count > 0 
-                ? new Vector3(centerSum.X / relevantMeshes.Count, highestY, centerSum.Z / relevantMeshes.Count)
-                : obj.GetWorldMatrix().Translation;
+            if (relevantMeshes.Count > 0)
+            {
+                // Draw single oriented box for the group
+                DrawOriented3DBoxLowLevel(rootWorld, collectiveMin, collectiveMax, label.SegmentationColor);
+                
+                // Draw Keypoint Skeleton if present
+                DrawKeypointOverlay(obj);
+            }
+            else
+            {
+                // FALLBACK: If no meshes found, try to use keypoints or a small default box at origin
+                if (CountKeypointChildren(obj) > 0)
+                {
+                    DrawKeypointOverlay(obj);
+                    // Draw a small 10cm cube as a fallback indicator
+                    DrawOriented3DBoxLowLevel(rootWorld, new Vector3(-0.05f), new Vector3(0.05f), label.SegmentationColor);
+                }
+            }
 
-            if (!WorldToScreen(labelWorldPos, out Vector2 screenPos)) continue;
- 
-            // Simple 2D Label Badge
-            string text = $"[{label.ClassName}] #{label.ClassID}";
-            Vector2 textSize = ImGui.CalcTextSize(text);
-            Vector2 boxSize = textSize + new Vector2(12, 6);
-            Vector2 pMin = screenPos - new Vector2(boxSize.X / 2, 0); // At the point
-            Vector2 pMax = pMin + boxSize;
-            
-            Vector4 col = new Vector4(label.SegmentationColor, 1.0f);
-            drawList.AddRectFilled(pMin, pMax, ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f)), 4f);
-            drawList.AddRect(pMin, pMax, ImGui.GetColorU32(col), 4f, 0, 2f);
-            drawList.AddText(pMin + new Vector2(6, 3), ImGui.GetColorU32(Vector4.One), text);
+            // --- Draw Text Badge ---
+            Vector3 labelWorldPos = obj.GetWorldMatrix().Translation;
+            if (relevantMeshes.Count > 0) labelWorldPos += new Vector3(0, collectiveMax.Y + 0.2f, 0);
+
+            if (WorldToScreen(labelWorldPos, out Vector2 screenPos))
+            {
+                string text = $"[{label.ClassName}] #{label.ClassID}";
+                Vector2 textSize = ImGui.CalcTextSize(text);
+                Vector2 boxSize = textSize + new Vector2(12, 6);
+                Vector2 pMin = screenPos - new Vector2(boxSize.X / 2, boxSize.Y); 
+                Vector2 pMax = pMin + boxSize;
+                
+                drawList.AddRectFilled(pMin, pMax, ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f)), 4f);
+                drawList.AddRect(pMin, pMax, ImGui.GetColorU32(new Vector4(label.SegmentationColor, 1.0f)), 4f, 0, 2f);
+                drawList.AddText(pMin + new Vector2(6, 3), ImGui.GetColorU32(Vector4.One), text);
+            }
         }
     }
 
-    private void FindMeshesInGroup(SceneObject obj, Action<SceneObject, Rendering.Mesh> action)
-    {
-        var mr = obj.GetComponent<MeshRendererComponent>();
-        if (mr?.Mesh != null) action(obj, mr.Mesh);
-
-        foreach (var child in obj.Children)
-        {
-            if (child.HasComponent<LabelComponent>()) continue;
-            FindMeshesInGroup(child, action);
-        }
-    }
- 
-    private void DrawOriented3DBox(SceneObject obj, Rendering.Mesh mesh, Vector3 baseColor)
+    private void DrawOriented3DBoxLowLevel(Matrix4x4 model, Vector3 min, Vector3 max, Vector3 baseColor)
     {
         var drawList = ImGui.GetWindowDrawList();
-        var model = obj.GetWorldMatrix();
         
-        // Apply primary bone transform so the UI bounding box tracks animated meshes
-        if (mesh.HasSkinning && mesh.Skeleton != null && mesh.PrimaryBoneIndex >= 0)
-        {
-            var boneMatrices = mesh.Skeleton.GetFinalMatrices();
-            if (mesh.PrimaryBoneIndex < boneMatrices.Length)
-            {
-                model = boneMatrices[mesh.PrimaryBoneIndex] * model;
-            }
-        }
-        
-        Vector3 min = mesh.BoundingBoxMin;
-        Vector3 max = mesh.BoundingBoxMax;
- 
-        // 8 Corners of the AABB in mesh-space
         Vector3[] localCorners = 
         {
             new(min.X, min.Y, min.Z), new(max.X, min.Y, min.Z), 
@@ -1192,7 +1237,6 @@ public class UIManager
             new(max.X, max.Y, max.Z), new(min.X, max.Y, max.Z)
         };
  
-        // Project to Screen
         Vector2[] screenCorners = new Vector2[8];
         bool[] valid = new bool[8];
         for (int i = 0; i < 8; i++)
@@ -1201,20 +1245,26 @@ public class UIManager
             valid[i] = WorldToScreen(worldP, out screenCorners[i]);
         }
  
-        // Draw 12 Edges
         int[,] edges = {
-            {0, 1}, {1, 2}, {2, 3}, {3, 0}, // Bottom
-            {4, 5}, {5, 6}, {6, 7}, {7, 4}, // Top
-            {0, 4}, {1, 5}, {2, 6}, {3, 7}  // Pillars
+            {0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6}, {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}
         };
  
         uint col = ImGui.GetColorU32(new Vector4(baseColor, 0.8f));
         for (int i = 0; i < 12; i++)
         {
             if (valid[edges[i,0]] && valid[edges[i,1]])
-            {
-                drawList.AddLine(screenCorners[edges[i,0]], screenCorners[edges[i,1]], col, 1.5f);
-            }
+                drawList.AddLine(screenCorners[edges[i,0]], screenCorners[edges[i,1]], col, 2.0f);
+        }
+    }
+ 
+    private void FindMeshesInGroup(SceneObject obj, Action<SceneObject, Rendering.Mesh> action)
+    {
+        var mr = obj.GetComponent<MeshRendererComponent>();
+        if (mr?.Mesh != null) action(obj, mr.Mesh);
+
+        foreach (var child in obj.Children)
+        {
+            FindMeshesInGroup(child, action);
         }
     }
  
@@ -1795,10 +1845,142 @@ public class UIManager
 
             // --- Texture ---
             bool hasTex = sel.HasComponent<TextureRandomizerComponent>();
-            if (ImGui.Checkbox("Texture Randomization", ref hasTex))
+            if (ImGui.Checkbox("Simple Texture Random", ref hasTex))
             {
                 if (hasTex) sel.AddComponent(new TextureRandomizerComponent());
                 else sel.RemoveComponent<TextureRandomizerComponent>();
+            }
+
+            // --- Material (Advanced) ---
+            bool hasMat = sel.HasComponent<MaterialRandomizerComponent>();
+            if (ImGui.Checkbox("Advanced Material Random", ref hasMat))
+            {
+                if (hasMat) sel.AddComponent(new MaterialRandomizerComponent());
+                else sel.RemoveComponent<MaterialRandomizerComponent>();
+            }
+            var mComp = sel.GetComponent<MaterialRandomizerComponent>();
+            if (mComp != null)
+            {
+                ImGui.Indent();
+                ImGui.Checkbox("Randomize Color", ref mComp.RandomizeColor);
+                ImGui.Checkbox("Randomize Texture", ref mComp.RandomizeTexture);
+                ImGui.Checkbox("Randomize Emissive", ref mComp.RandomizeEmissive);
+                
+                if (mComp.RandomizeColor)
+                {
+                    ImGui.Checkbox("Use Custom Palette", ref mComp.UsePalette);
+                    if (mComp.UsePalette)
+                    {
+                        // Color Selector Dropdown
+                        string[] colorNames = mComp.ColorPalette.Select((c, i) => $"Color {i}").ToArray();
+                        int selIdx = mComp.SelectedColorIndex;
+                        if (ImGui.Combo("Select Color##pal", ref selIdx, colorNames, colorNames.Length))
+                        {
+                            mComp.SelectedColorIndex = selIdx;
+                            // Apply for preview
+                            ApplyMaterialPropertyRecursive(sel, m => m.BaseColor = mComp.ColorPalette[selIdx]);
+                        }
+
+                        for (int i = 0; i < mComp.ColorPalette.Count; i++)
+                        {
+                            var c = mComp.ColorPalette[i];
+                            if (ImGui.ColorEdit4($"Edit {i}##pal", ref c, ImGuiColorEditFlags.NoInputs))
+                            {
+                                mComp.ColorPalette[i] = c;
+                                if (i == mComp.SelectedColorIndex) ApplyMaterialPropertyRecursive(sel, m => m.BaseColor = c);
+                            }
+                            if (mComp.ColorPalette.Count > 1)
+                            {
+                                ImGui.SameLine();
+                                if (ImGui.Button($"X##rem{i}")) 
+                                {
+                                    mComp.ColorPalette.RemoveAt(i);
+                                    mComp.SelectedColorIndex = Math.Clamp(mComp.SelectedColorIndex, 0, mComp.ColorPalette.Count - 1);
+                                    break;
+                                }
+                            }
+                        }
+                        if (ImGui.Button("+ Add Color")) mComp.ColorPalette.Add(new Vector4(1,1,1,1));
+                    }
+                    else
+                    {
+                        ImGui.DragFloatRange2("Brightness Range", ref mComp.MinBrightness, ref mComp.MaxBrightness, 0.01f, 0f, 2f);
+                    }
+                }
+
+                if (mComp.RandomizeTexture)
+                {
+                    // Texture Selector Dropdown with inline Delete (LOCAL POOL)
+                    var pool = mComp.LocalTexturePool;
+                    if (pool.Count > 0)
+                    {
+                        string preview = string.IsNullOrEmpty(mComp.SelectedTexturePath) ? "Select Texture..." : Path.GetFileName(mComp.SelectedTexturePath);
+                        if (ImGui.BeginCombo("Texture Pool", preview))
+                        {
+                            for (int i = 0; i < pool.Count; i++)
+                            {
+                                string path = pool[i];
+                                string name = Path.GetFileName(path);
+                                bool selected = (path == mComp.SelectedTexturePath);
+
+                                if (ImGui.Selectable($"{name}##tex{i}", selected, ImGuiSelectableFlags.None, new Vector2(ImGui.GetContentRegionAvail().X - 60, 0)))
+                                {
+                                    mComp.SelectedTexturePath = path;
+                                    uint id = _app.AssetManager.LoadTexture(path);
+                                    if (id > 0) ApplyTextureRecursive(sel, id, path, true);
+                                }
+
+                                ImGui.SameLine();
+                                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.6f, 0.2f, 0.2f, 1f));
+                                if (ImGui.SmallButton($"Remove##{i}"))
+                                {
+                                    pool.RemoveAt(i);
+                                    if (mComp.SelectedTexturePath == path) mComp.SelectedTexturePath = null;
+                                    ImGui.PopStyleColor();
+                                    ImGui.EndCombo();
+                                    return; 
+                                }
+                                ImGui.PopStyleColor();
+
+                                if (selected) ImGui.SetItemDefaultFocus();
+                            }
+                            ImGui.EndCombo();
+                        }
+                    }
+                    else
+                    {
+                        ImGui.TextDisabled("(Texture Pool is Empty)");
+                    }
+
+                    if (ImGui.Button("🚀 Batch Import Textures..."))
+                    {
+                        var paths = PickMultipleFilesWithDialog("Images (*.png;*.jpg;*.jpeg;*.tga)|*.png;*.jpg;*.jpeg;*.tga|All files (*.*)|*.*");
+                        foreach (var path in paths)
+                        {
+                            string fileName = Path.GetFileName(path);
+                            string dest = Path.Combine(_app.AssetManager.TexturesPath, fileName);
+                            try {
+                                if (!File.Exists(dest)) File.Copy(path, dest, true);
+                                if (!mComp.LocalTexturePool.Contains(dest)) mComp.LocalTexturePool.Add(dest);
+                                mComp.SelectedTexturePath = dest; 
+                                _app.AssetManager.LoadTexture(dest);
+                            } catch { }
+                        }
+                    }
+                    
+                    if (pool.Count > 0)
+                    {
+                        ImGui.SameLine();
+                        if (ImGui.Button("🗑 Clear List")) pool.Clear();
+                    }
+
+                }
+
+                if (mComp.RandomizeEmissive)
+                {
+                    ImGui.DragFloatRange2("Emissive Range", ref mComp.MinEmissive, ref mComp.MaxEmissive, 0.1f, 0f, 10f);
+                }
+                ImGui.Unindent();
             }
         }
 
@@ -1844,6 +2026,7 @@ public class UIManager
                     else if (r.Name == "Rotation") active = sel_obj.HasComponent<RotationRandomizerComponent>();
                     else if (r.Name == "Scale") active = sel_obj.HasComponent<ScaleRandomizerComponent>();
                     else if (r.Name == "Texture") active = sel_obj.HasComponent<TextureRandomizerComponent>();
+                    else if (r.Name == "Material") active = sel_obj.HasComponent<MaterialRandomizerComponent>();
                     else if (r.Name == "Depth Scale") active = sel_obj.HasComponent<DepthScaleComponent>();
                 }
 
@@ -1856,6 +2039,7 @@ public class UIManager
                         else if (r.Name == "Rotation") sel_obj.AddComponent(new RotationRandomizerComponent());
                         else if (r.Name == "Scale") sel_obj.AddComponent(new ScaleRandomizerComponent());
                         else if (r.Name == "Texture") sel_obj.AddComponent(new TextureRandomizerComponent());
+                        else if (r.Name == "Material") sel_obj.AddComponent(new MaterialRandomizerComponent());
                         else if (r.Name == "Depth Scale") sel_obj.AddComponent(new DepthScaleComponent());
                     }
                     else
@@ -1864,6 +2048,7 @@ public class UIManager
                         else if (r.Name == "Rotation") sel_obj.RemoveComponent<RotationRandomizerComponent>();
                         else if (r.Name == "Scale") sel_obj.RemoveComponent<ScaleRandomizerComponent>();
                         else if (r.Name == "Texture") sel_obj.RemoveComponent<TextureRandomizerComponent>();
+                        else if (r.Name == "Material") sel_obj.RemoveComponent<MaterialRandomizerComponent>();
                         else if (r.Name == "Depth Scale") sel_obj.RemoveComponent<DepthScaleComponent>();
                     }
                 }
@@ -1908,7 +2093,10 @@ public class UIManager
 
                     if (r is HDRIRandomizer hr && hr.NeedsRefresh)
                     {
-                        ImportHdriWithDialog();
+                        // If it's just a refresh (deleted file), don't show dialog
+                        if (hr.CurrentHDRI == null) RefreshHDRIs();
+                        else ImportHdriWithDialog();
+                        
                         hr.NeedsRefresh = false;
                     }
                 }
@@ -1987,7 +2175,7 @@ public class UIManager
                 ImGui.Text($"Camera Position: ({camPos.X:F2}, {camPos.Y:F2}, {camPos.Z:F2})");
                 
                 float fov = cam.FieldOfView;
-                if (ImGui.SliderFloat("Camera FOV:", ref fov, 10, 120))
+                if (ImGui.SliderFloat("Camera FOV:", ref fov, 10, 170))
                     cam.FieldOfView = fov;
             }
 
@@ -2165,20 +2353,27 @@ public class UIManager
         ImGui.Text("CUDA:"); ImGui.SameLine(100);
         ImGui.TextColored(tm.GpuAvailable ? new Vector4(0.3f, 1f, 0.5f, 1f) : new Vector4(0.6f, 0.6f, 0.6f, 1f), tm.GpuAvailable ? "AVAILABLE" : "NOT FOUND (CPU ONLY)");
 
-        if (!tm.IsPythonInstalled || !tm.IsYoloInstalled)
+        if (!tm.IsPythonInstalled || !tm.IsYoloInstalled || !tm.GpuAvailable)
         {
             ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.8f, 0.4f, 0.1f, 1.0f));
-            if (ImGui.Button("🔧 Setup Python Environment", new Vector2(-1, 0)))
+            string btnText = (!tm.IsPythonInstalled || !tm.IsYoloInstalled) 
+                ? "🔧 Setup Python Environment" 
+                : "🔧 Upgrade Environment for GPU (CUDA)";
+                
+            if (ImGui.Button(btnText, new Vector2(-1, 0)))
             {
                 tm.InstallDependencies();
             }
             ImGui.PopStyleColor();
-            ImGui.TextWrapped("Click above to install required Python packages (Ultralytics & Torch).");
+            
+            if (!tm.GpuAvailable && tm.IsPythonInstalled)
+                ImGui.TextWrapped("Click above to install the CUDA-accelerated PyTorch. (Currently using CPU-only version)");
+            else
+                ImGui.TextWrapped("Click above to install required Python packages (Ultralytics & Torch).");
         }
-        else
-        {
-            if (ImGui.Button("Re-check Environment")) tm.CheckEnvironment();
-        }
+
+        if (ImGui.Button("Re-check Environment", new Vector2(-1, 0))) 
+            tm.CheckEnvironment();
 
         ImGui.Separator();
 
@@ -2405,6 +2600,27 @@ public class UIManager
         }
     }
 
+    private void RefreshTexturePools()
+    {
+        var files = _app.AssetManager.GetAvailableTextures();
+        
+        var texRand = _allRandomizers.OfType<TextureRandomizer>().FirstOrDefault();
+        if (texRand != null)
+        {
+            texRand.TexturePaths.Clear();
+            texRand.TexturePaths.AddRange(files);
+            texRand.LoadTextureFunc = _app.AssetManager.LoadTexture;
+        }
+
+        var matRand = _allRandomizers.OfType<MaterialRandomizer>().FirstOrDefault();
+        if (matRand != null)
+        {
+            // We no longer auto-fill global PoolTexturePaths for MaterialRandomizer 
+            // because the user wants per-object pools.
+            matRand.LoadTextureFunc = _app.AssetManager.LoadTexture;
+        }
+    }
+
     private void ImportModelWithDialog()
     {
         string? path = PickFileWithDialog("3D Models (*.fbx;*.obj;*.gltf;*.glb)|*.fbx;*.obj;*.gltf;*.glb|All files (*.*)|*.*");
@@ -2474,35 +2690,45 @@ public class UIManager
         }
     }
 
+    private List<string> PickMultipleFilesWithDialog(string filter)
+    {
+        AddLog("[Assets] Opening multi-file dialog...");
+        try
+        {
+            using var f = new System.Windows.Forms.OpenFileDialog();
+            f.Filter = filter;
+            f.Multiselect = true;
+            f.Title = "Select Files to Import";
+            if (f.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            {
+                return f.FileNames.ToList();
+            }
+            return new List<string>();
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[Error] Native dialog failed: {ex.Message}");
+            return new List<string>();
+        }
+    }
+
     private string? PickFileWithDialog(string filter)
     {
         AddLog("[Assets] Opening file dialog...");
         try
         {
-            // Use a clean single-line command for reliability and proper quoting
-            string command = $"Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = '{filter}'; $f.Title = 'Select File to Import'; if($f.ShowDialog() -eq 'OK') {{ $f.FileName }}";
-
-            var process = new System.Diagnostics.Process();
-            process.StartInfo = new System.Diagnostics.ProcessStartInfo
+            using var f = new System.Windows.Forms.OpenFileDialog();
+            f.Filter = filter;
+            f.Title = "Select File to Import";
+            if (f.ShowDialog() == System.Windows.Forms.DialogResult.OK)
             {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            process.Start();
-            string output = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit();
-            
-            if (string.IsNullOrEmpty(output)) return null;
-            
-            AddLog($"[Assets] Selected: {Path.GetFileName(output)}");
-            return output;
+                return f.FileName;
+            }
+            return null;
         }
         catch (Exception ex)
         {
-            AddLog($"[Error] Failed to open file dialog: {ex.Message}");
+            AddLog($"[Error] Native dialog failed: {ex.Message}");
             return null;
         }
     }
@@ -2512,27 +2738,19 @@ public class UIManager
         AddLog("[Scenario] Opening save dialog...");
         try
         {
-            string command = $"Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.SaveFileDialog; $f.Filter = '{filter}'; $f.DefaultExt = '{defaultExt}'; $f.Title = 'Save Scenario'; if($f.ShowDialog() -eq 'OK') {{ $f.FileName }}";
-
-            var process = new System.Diagnostics.Process();
-            process.StartInfo = new System.Diagnostics.ProcessStartInfo
+            using var f = new System.Windows.Forms.SaveFileDialog();
+            f.Filter = filter;
+            f.DefaultExt = defaultExt;
+            f.Title = "Save Scenario";
+            if (f.ShowDialog() == System.Windows.Forms.DialogResult.OK)
             {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            process.Start();
-            string output = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit();
-            
-            if (string.IsNullOrEmpty(output)) return null;
-            return output;
+                return f.FileName;
+            }
+            return null;
         }
         catch (Exception ex)
         {
-            AddLog($"[Error] Failed to open save dialog: {ex.Message}");
+            AddLog($"[Error] Native save dialog failed: {ex.Message}");
             return null;
         }
     }

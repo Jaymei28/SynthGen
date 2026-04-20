@@ -246,3 +246,87 @@ public class DepthScaleMapper : RandomizerBase
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Material Randomizer (Direct color & Emissive)
+// ═══════════════════════════════════════════════════════════════════════════
+public class MaterialRandomizer : RandomizerBase
+{
+    public override string Name => "Material";
+    public override string Category => "Object";
+
+    public List<string> PoolTexturePaths { get; set; } = new();
+    public Func<string, uint>? LoadTextureFunc { get; set; }
+
+    public override void Randomize(SceneGraph scene, Random rng)
+    {
+        foreach (var obj in scene.Objects)
+        {
+            // We walk all children too because clothing is often on sub-meshes
+            RandomizeRecursive(obj, rng);
+        }
+    }
+
+    private void RandomizeRecursive(SceneObject obj, Random rng)
+    {
+        if (!RandomizerHelper.ShouldRandomize(obj)) return;
+
+        var comp = obj.GetComponent<MaterialRandomizerComponent>();
+        var mr = obj.GetComponent<MeshRendererComponent>();
+
+        if (comp != null && comp.Enabled && mr != null)
+        {
+            // 1. Color Randomization
+            if (comp.RandomizeColor)
+            {
+                if (comp.UsePalette && comp.ColorPalette.Count > 0)
+                {
+                    mr.Material.BaseColor = comp.ColorPalette[rng.Next(comp.ColorPalette.Count)];
+                }
+                else
+                {
+                    mr.Material.BaseColor = new Vector4(
+                        RandRange(rng, 0f, 1f),
+                        RandRange(rng, 0f, 1f),
+                        RandRange(rng, 0f, 1f),
+                        1.0f
+                    );
+                }
+                // Adjust brightness multiplier
+                mr.Material.ColorIntensity = RandRange(rng, comp.MinBrightness, comp.MaxBrightness);
+            }
+
+            // 2. Texture Randomization (for screens/clothing patterns)
+            if (comp.RandomizeTexture && comp.LocalTexturePool.Count > 0 && LoadTextureFunc != null)
+            {
+                string path = comp.LocalTexturePool[rng.Next(comp.LocalTexturePool.Count)];
+                uint id = LoadTextureFunc(path);
+                if (id > 0)
+                {
+                    mr.Material.AlbedoTextureID = id;
+                    mr.Material.AlbedoTexturePath = path;
+                }
+            }
+
+            // 3. Emissive (for screens)
+            if (comp.RandomizeEmissive)
+            {
+                mr.Material.EmissiveColor = new Vector3(
+                    RandRange(rng, 0.5f, 1f),
+                    RandRange(rng, 0.5f, 1f),
+                    RandRange(rng, 0.5f, 1f)
+                );
+                mr.Material.EmissiveIntensity = RandRange(rng, comp.MinEmissive, comp.MaxEmissive);
+            }
+        }
+
+        foreach (var child in obj.Children) RandomizeRecursive(child, rng);
+    }
+
+    public override void DrawConfigUI(SceneGraph scene)
+    {
+        ImGui.TextWrapped("Enables per-object color/texture/emissive randomization.");
+        ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1f), "Add 'MaterialRandomizer' component to specific objects in Inspector.");
+        ImGui.Text($"Textures in pool: {PoolTexturePaths.Count}");
+    }
+}
+
