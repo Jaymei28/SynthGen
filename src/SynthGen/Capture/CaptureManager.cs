@@ -81,6 +81,7 @@ public class CaptureManager
         _pendingCapture = true;
         _totalCapturedImages = 0;
         _renderer.ShowSceneUI = false;
+        _renderer.IsDatasetGenerationMode = true;
 
         // Create output directories
         Directory.CreateDirectory(Path.Combine(OutputDirectory, "rgb"));
@@ -153,6 +154,7 @@ public class CaptureManager
             OnLog?.Invoke("[Capture] Generation stopped by user. Scene restored.");
         }
         _renderer.ShowSceneUI = true;
+        _renderer.IsDatasetGenerationMode = false;
         IsGenerating = false;
     }
 

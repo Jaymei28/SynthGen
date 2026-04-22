@@ -41,6 +41,10 @@ public static class BoundingBoxAnnotator
 
         for (int y = 0; y < height; y++)
         {
+            // Invert Y because OpenGL pixels start at the bottom, 
+            // but YOLO/Image space starts at the top.
+            int pixelY = height - 1 - y;
+
             for (int x = 0; x < width; x++)
             {
                 int idx = (y * width + x) * 4;
@@ -53,7 +57,7 @@ public static class BoundingBoxAnnotator
                 {
                     bboxes[key] = new BBox2D
                     {
-                        X1 = x, Y1 = y, X2 = x, Y2 = y,
+                        X1 = x, Y1 = pixelY, X2 = x, Y2 = pixelY,
                         ClassID = info.classId,
                         InstanceID = info.instanceId,
                         ClassName = info.className
@@ -63,9 +67,9 @@ public static class BoundingBoxAnnotator
                 {
                     var b = bboxes[key];
                     b.X1 = Math.Min(b.X1, x);
-                    b.Y1 = Math.Min(b.Y1, y);
+                    b.Y1 = Math.Min(b.Y1, pixelY);
                     b.X2 = Math.Max(b.X2, x);
-                    b.Y2 = Math.Max(b.Y2, y);
+                    b.Y2 = Math.Max(b.Y2, pixelY);
                     bboxes[key] = b;
                 }
             }

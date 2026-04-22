@@ -48,12 +48,36 @@ public class HDRIRandomizer : RandomizerBase
         
         if (HDRIPaths.Count > 0)
         {
-            int currentIdx = CurrentHDRI != null ? HDRIPaths.IndexOf(CurrentHDRI) : -1;
-            string[] names = HDRIPaths.ConvertAll(p => System.IO.Path.GetFileName(p)).ToArray();
-            
-            if (ImGui.Combo("Select HDRI", ref currentIdx, names, names.Length))
+            string preview = CurrentHDRI != null ? System.IO.Path.GetFileName(CurrentHDRI) : "Select HDRI...";
+            if (ImGui.BeginCombo("HDRI Pool", preview))
             {
-                if (currentIdx >= 0) CurrentHDRI = HDRIPaths[currentIdx];
+                for (int i = 0; i < HDRIPaths.Count; i++)
+                {
+                    string path = HDRIPaths[i];
+                    string name = System.IO.Path.GetFileName(path);
+                    bool selected = (path == CurrentHDRI);
+
+                    if (ImGui.Selectable($"{name}##{i}", selected, ImGuiSelectableFlags.None, new System.Numerics.Vector2(ImGui.GetContentRegionAvail().X - 25, 0)))
+                    {
+                        CurrentHDRI = path;
+                    }
+
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton($"X##del{i}"))
+                    {
+                        try {
+                            System.IO.File.Delete(path);
+                            HDRIPaths.RemoveAt(i);
+                            if (CurrentHDRI == path) CurrentHDRI = null;
+                            NeedsRefresh = true;
+                            ImGui.EndCombo();
+                            return; 
+                        } catch { }
+                    }
+
+                    if (selected) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
             }
         }
         else

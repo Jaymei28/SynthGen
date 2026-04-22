@@ -1,0 +1,7 @@
+path: C:\Users\Administrator\.gemini\antigravity\scratch\SynthGen\output
+train: train/images
+val: val/images
+
+nc: 9
+names: ['unknown_0', 'unknown_1', 'unknown_2', 'unknown_3', 'unknown_4', 'unknown_5', 'unknown_6', 'unknown_7', 'person']
+kpt_shape: [8, 3]

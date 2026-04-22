@@ -64,14 +64,30 @@ public class Camera : SceneObject
                 OrbitTarget.Z + OrbitDistance * MathF.Cos(pitchRad) * MathF.Cos(yawRad)
             );
             Transform.Position = pos;
-            return Matrix4x4.CreateLookAt(pos, OrbitTarget, Vector3.UnitY);
+
+            Vector3 forward = Vector3.Normalize(OrbitTarget - pos);
+            Vector3 up = Vector3.UnitY;
+            // Handle Top/Bottom singularity: If looking straight down/up, use Z as the 'Up' vector
+            if (MathF.Abs(Vector3.Dot(forward, up)) > 0.99f) up = Vector3.UnitZ;
+
+            return Matrix4x4.CreateLookAt(pos, OrbitTarget, up);
         }
     }
 
     public Matrix4x4 GetProjectionMatrix(float aspectRatio)
     {
+        // For Fisheye, we need a significantly wider raw render to fill the warped view.
+        // A standard 60-90 FOV render just "bends" into a small ball.
+        float rawFOV = FieldOfView;
+        if (FisheyeStrength > 0.01f)
+        {
+            // Expand rendering FOV so the post-process has more "world" to warp in.
+            // A strength of 1.0 adds ~100 degrees of raw fov to compensate for distortion zoom.
+            rawFOV = FieldOfView + (FisheyeStrength * 100f);
+        }
+
         return Matrix4x4.CreatePerspectiveFieldOfView(
-            FieldOfView * MathF.PI / 180f,
+            Math.Clamp(rawFOV, 1f, 175f) * MathF.PI / 180f,
             aspectRatio,
             NearPlane,
             FarPlane
@@ -179,9 +195,11 @@ public class Camera : SceneObject
             OrbitTarget.Z + OrbitDistance * MathF.Cos(pitchRad) * MathF.Cos(yawRad)
         );
 
-        // Calculate fly angles to match current view
-        _flyYaw = OrbitYaw + 180f;
-        _flyPitch = -OrbitPitch;
+        // Precision calculation of fly-mode angles from the current view vector
+        Vector3 forward = Vector3.Normalize(OrbitTarget - _flyPos);
+        _flyPitch = MathF.Asin(forward.Y) * 180f / MathF.PI;
+        _flyYaw = MathF.Atan2(forward.X, forward.Z) * 180f / MathF.PI;
+        
         _isFlyMode = true;
     }
 

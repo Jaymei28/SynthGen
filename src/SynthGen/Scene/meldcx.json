@@ -1,0 +1,205 @@
+{
+  "Objects": [
+    {
+      "Name": "Chambre",
+      "AssetPath": "assets/models\\Chambre.fbx",
+      "Position": {
+        "x": 0,
+        "y": 0.049379386,
+        "z": 0
+      },
+      "Rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "Scale": {
+        "x": 0.01792453,
+        "y": 0.05491202,
+        "z": 0.041620836
+      },
+      "ExcludeFromRandomization": false,
+      "BodyPartGroup": "",
+      "PoseStandard": "COCO",
+      "Components": [],
+      "Children": [
+        {
+          "Name": "RootNode",
+          "Position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "Rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "Scale": {
+            "x": 1,
+            "y": 1,
+            "z": 1
+          },
+          "ExcludeFromRandomization": false,
+          "BodyPartGroup": "",
+          "PoseStandard": "COCO",
+          "Components": [],
+          "Children": [
+            {
+              "Name": "Sol",
+              "Position": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+              },
+              "Rotation": {
+                "x": -90.00001,
+                "y": 0,
+                "z": 0
+              },
+              "Scale": {
+                "x": 400,
+                "y": 402,
+                "z": 10.000002
+              },
+              "ExcludeFromRandomization": false,
+              "BodyPartGroup": "",
+              "PoseStandard": "COCO",
+              "Components": [
+                {
+                  "Type": "MeshRendererComponent",
+                  "JsonData": "{\r\n  \u0022Material\u0022: {\r\n    \u0022BaseColor\u0022: {\r\n      \u0022x\u0022: 0.8,\r\n      \u0022y\u0022: 0.8,\r\n      \u0022z\u0022: 0.8,\r\n      \u0022w\u0022: 1\r\n    },\r\n    \u0022Smoothness\u0022: 0.1,\r\n    \u0022Metallic\u0022: 0,\r\n    \u0022NormalScale\u0022: 1,\r\n    \u0022ColorIntensity\u0022: 1,\r\n    \u0022EmissiveColor\u0022: {\r\n      \u0022x\u0022: 0,\r\n      \u0022y\u0022: 0,\r\n      \u0022z\u0022: 0\r\n    },\r\n    \u0022EmissiveIntensity\u0022: 1,\r\n    \u0022AlbedoTextureID\u0022: 13,\r\n    \u0022NormalTextureID\u0022: 0,\r\n    \u0022MaskMapTextureID\u0022: 0,\r\n    \u0022AlbedoTexturePath\u0022: \u0022assets/textures\\\\floor.jpg\u0022\r\n  },\r\n  \u0022Visible\u0022: true\r\n}"
+                }
+              ],
+              "Children": []
+            },
+            {
+              "Name": "Mur",
+              "Position": {
+                "x": -400,
+                "y": 107.79851,
+                "z": 0
+              },
+              "Rotation": {
+                "x": -90.00001,
+                "y": 0,
+                "z": 0
+              },
+              "Scale": {
+                "x": 8.000002,
+                "y": 100,
+                "z": 100
+              },
+              "ExcludeFromRandomization": false,
+              "BodyPartGroup": "",
+              "PoseStandard": "COCO",
+              "Components": [
+                {
+                  "Type": "MeshRendererComponent",
+                  "JsonData": "{\r\n  \u0022Material\u0022: {\r\n    \u0022BaseColor\u0022: {\r\n      \u0022x\u0022: 0,\r\n      \u0022y\u0022: 0,\r\n      \u0022z\u0022: 0,\r\n      \u0022w\u0022: 1\r\n    },\r\n    \u0022Smoothness\u0022: 0.1,\r\n    \u0022Metallic\u0022: 0,\r\n    \u0022NormalScale\u0022: 1,\r\n    \u0022ColorIntensity\u0022: 1,\r\n    \u0022EmissiveColor\u0022: {\r\n      \u0022x\u0022: 0,\r\n      \u0022y\u0022: 0,\r\n      \u0022z\u0022: 0\r\n    },\r\n    \u0022EmissiveIntensity\u0022: 1,\r\n    \u0022AlbedoTextureID\u0022: 11,\r\n    \u0022NormalTextureID\u0022: 0,\r\n    \u0022MaskMapTextureID\u0022: 0,\r\n    \u0022AlbedoTexturePath\u0022: \u0022assets/textures\\\\Clay004_2K_Color.png\u0022\r\n  },\r\n  \u0022Visible\u0022: true\r\n}"
+                }
+              ],
+              "Children": [
+                {
+                  "Name": "Cube.001",
+                  "Position": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                  },
+                  "Rotation": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                  },
+                  "Scale": {
+                    "x": 1.001,
+                    "y": 1.001,
+                    "z": 1.001
+                  },
+                  "ExcludeFromRandomization": false,
+                  "BodyPartGroup": "",
+                  "PoseStandard": "COCO",
+                  "Components": [
+                    {
+                      "Type": "MeshRendererComponent",
+                      "JsonData": "{\r\n  \u0022Material\u0022: {\r\n    \u0022BaseColor\u0022: {\r\n      \u0022x\u0022: 0.6666666,\r\n      \u0022y\u0022: 0.6666666,\r\n      \u0022z\u0022: 0.6666666,\r\n      \u0022w\u0022: 1\r\n    },\r\n    \u0022Smoothness\u0022: 0.1,\r\n    \u0022Metallic\u0022: 0,\r\n    \u0022NormalScale\u0022: 1,\r\n    \u0022ColorIntensity\u0022: 1,\r\n    \u0022EmissiveColor\u0022: {\r\n      \u0022x\u0022: 0,\r\n      \u0022y\u0022: 0,\r\n      \u0022z\u0022: 0\r\n    },\r\n    \u0022EmissiveIntensity\u0022: 1,\r\n    \u0022AlbedoTextureID\u0022: 11,\r\n    \u0022NormalTextureID\u0022: 0,\r\n    \u0022MaskMapTextureID\u0022: 0,\r\n    \u0022AlbedoTexturePath\u0022: \u0022assets/textures\\\\Clay004_2K_Color.png\u0022\r\n  },\r\n  \u0022Visible\u0022: true\r\n}"
+                    }
+                  ],
+                  "Children": []
+                }
+              ]
+            },
+            {
+              "Name": "Plafond",
+              "Position": {
+                "x": 0,
+                "y": 300,
+                "z": 0
+              },
+              "Rotation": {
+                "x": -90.00001,
+                "y": 0,
+                "z": 0
+              },
+              "Scale": {
+                "x": 100,
+                "y": 100,
+                "z": 10.000002
+              },
+              "ExcludeFromRandomization": false,
+              "BodyPartGroup": "",
+              "PoseStandard": "COCO",
+              "Components": [
+                {
+                  "Type": "MeshRendererComponent",
+                  "JsonData": "{\r\n  \u0022Material\u0022: {\r\n    \u0022BaseColor\u0022: {\r\n      \u0022x\u0022: 1,\r\n      \u0022y\u0022: 1,\r\n      \u0022z\u0022: 1,\r\n      \u0022w\u0022: 1\r\n    },\r\n    \u0022Smoothness\u0022: 0.1,\r\n    \u0022Metallic\u0022: 0,\r\n    \u0022NormalScale\u0022: 1,\r\n    \u0022ColorIntensity\u0022: 1,\r\n    \u0022EmissiveColor\u0022: {\r\n      \u0022x\u0022: 0,\r\n      \u0022y\u0022: 0,\r\n      \u0022z\u0022: 0\r\n    },\r\n    \u0022EmissiveIntensity\u0022: 1,\r\n    \u0022AlbedoTextureID\u0022: 0,\r\n    \u0022NormalTextureID\u0022: 0,\r\n    \u0022MaskMapTextureID\u0022: 0\r\n  },\r\n  \u0022Visible\u0022: true\r\n}"
+                }
+              ],
+              "Children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "Name": "Main Camera",
+      "Position": {
+        "x": -4.173868,
+        "y": 6.5620704,
+        "z": -0.92897534
+      },
+      "Rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "Scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "ExcludeFromRandomization": false,
+      "BodyPartGroup": "",
+      "PoseStandard": "COCO",
+      "Components": [],
+      "Children": []
+    }
+  ],
+  "Camera": {
+    "Position": {
+      "x": -4.173868,
+      "y": 6.5620704,
+      "z": -0.92897534
+    },
+    "OrbitYaw": -92.39929,
+    "OrbitPitch": 9.349865,
+    "OrbitDistance": 12,
+    "OrbitTarget": {
+      "x": 7.656328,
+      "y": 4.612519,
+      "z": -0.4332885
+    },
+    "FieldOfView": 60
+  }
+}

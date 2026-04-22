@@ -15,8 +15,11 @@ public class Material
     public Vector3 EmissiveColor = Vector3.Zero;
     public float EmissiveIntensity = 1.0f;
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public uint AlbedoTextureID;
+    [System.Text.Json.Serialization.JsonIgnore]
     public uint NormalTextureID;
+    [System.Text.Json.Serialization.JsonIgnore]
     public uint MaskMapTextureID; // Metallic(R), AO(G), Detail(B), Smoothness(A)
     
     public string? AlbedoTexturePath;

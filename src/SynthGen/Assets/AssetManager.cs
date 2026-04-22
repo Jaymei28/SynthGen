@@ -27,10 +27,11 @@ public class AssetManager
     private readonly Dictionary<string, Rendering.Mesh> _meshCache = new();
     private readonly Dictionary<string, uint> _textureCache = new();
 
-    public string ModelsPath { get; set; } = "assets/models";
-    public string TexturesPath { get; set; } = "assets/textures";
-    public string AnimationsPath { get; set; } = "assets/animations";
-    public string HDRIPath { get; set; } = "assets/hdri";
+    private static string BaseDir => AppContext.BaseDirectory;
+    public string ModelsPath { get; set; } = Path.Combine(BaseDir, "Assets", "models");
+    public string TexturesPath { get; set; } = Path.Combine(BaseDir, "Assets", "textures");
+    public string AnimationsPath { get; set; } = Path.Combine(BaseDir, "Assets", "animations");
+    public string HDRIPath { get; set; } = Path.Combine(BaseDir, "Assets", "hdri");
 
     public AssetManager(GL gl)
     {
@@ -824,6 +825,21 @@ public class AssetManager
 
     public unsafe uint LoadTexture(string path)
     {
+        if (string.IsNullOrEmpty(path)) return 0;
+        if (!Path.IsPathRooted(path))
+        {
+            // If path is not absolute, try to find it relative to app directory
+            string full = Path.GetFullPath(path, AppDomain.CurrentDomain.BaseDirectory);
+            if (File.Exists(full)) path = full;
+            else {
+                // Try relative to CWD as secondary fallback
+                path = Path.GetFullPath(path);
+            }
+        }
+        else {
+            path = Path.GetFullPath(path); // Standardize slashes etc
+        }
+
         if (_textureCache.TryGetValue(path, out uint cached)) return cached;
         try {
             string ext = Path.GetExtension(path).ToLower();

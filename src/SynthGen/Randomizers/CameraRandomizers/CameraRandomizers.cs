@@ -72,33 +72,33 @@ public class CameraPositionRandomizer : RandomizerBase
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Fisheye Randomizer
+// Fisheye Effect (single-value, not a randomizer)
 // ═══════════════════════════════════════════════════════════════════════════
 public class FisheyeRandomizer : RandomizerBase
 {
     public override string Name => "Fisheye";
     public override string Category => "Camera";
 
-    public float MinStrength = 0f;
-    public float MaxStrength = 1.5f;
+    public float Strength = 0.6f;
 
     public override void Randomize(SceneGraph scene, Random rng)
     {
+        // Fisheye is an effect, not randomized — just apply the fixed value
         var cam = scene.ActiveCamera;
         if (cam == null) return;
-        cam.FisheyeStrength = RandRange(rng, MinStrength, MaxStrength);
+        cam.FisheyeStrength = Strength;
     }
 
     public override void DrawConfigUI(SceneGraph scene)
     {
-        if (ImGui.DragFloatRange2("Strength", ref MinStrength, ref MaxStrength, 0.05f, 0, 3))
+        if (ImGui.SliderFloat("Strength", ref Strength, 0f, 3f))
             OnToggle(scene, Enabled);
     }
 
     public override void OnToggle(SceneGraph scene, bool enabled)
     {
         var cam = scene.ActiveCamera;
-        if (cam != null) cam.FisheyeStrength = enabled ? (MinStrength + MaxStrength) * 0.5f : 0f;
+        if (cam != null) cam.FisheyeStrength = enabled ? Strength : 0f;
     }
 }
 

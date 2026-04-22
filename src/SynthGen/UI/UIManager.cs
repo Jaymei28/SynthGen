@@ -55,6 +55,7 @@ public class UIManager
 
     // Gizmo state
     private char _hoveredAxis = '\0';
+    private ImGuiKey _heldToolKey = ImGuiKey.None; // Tracks which key is holding a tool active
 
     // Settings
     private Annotation.AnnotationMode _annotationMode = Annotation.AnnotationMode.BoundingBox;
@@ -62,6 +63,17 @@ public class UIManager
     private bool _uiLocked = true;
     private float _preFocusDistance = -1f; // -1 = not focused
     private const float ToolbarHeight = 48f;
+    
+    // Hierarchy feature state
+    private SceneObject? _renamingObject = null;
+    private byte[] _renameBuf = new byte[128];
+    private List<SceneObject> _draggedObjects = new(); 
+    private SceneObject? _dropTarget = null;
+
+    // Group manipulation state
+    private struct TransformState { public Vector3 Pos; public Vector3 Rot; public Vector3 Sca; }
+    private Dictionary<SceneObject, TransformState> _initialSelectedState = new();
+    private List<SceneObject> _topSelection = new();
 
 
     // Training panel state
@@ -199,20 +211,31 @@ public class UIManager
             {
                 var target = sel;
                 var clone = target.Clone();
-                _app.Scene.AddObject(clone);
+                
+                // Offset slightly so user can see it
+                clone.Transform.Position += new Vector3(0.5f, 0, 0.5f);
+
+                if (target.Parent != null) target.Parent.AddChild(clone);
+                
+                // CRITICAL: Always tell the scene about the new object (and its branch) 
+                // so it gets added to the flat rendering list.
+                _app.Scene.AddObject(clone);    
+
                 _app.Scene.SelectedObject = clone;
                 _app.CommandHistory.Push(new Commands.ActionCommand(
                     undoAction: () => { 
-                        _app.Scene.RemoveObject(clone); 
+                        if (clone.Parent != null) clone.Parent.Children.Remove(clone);
+                        else _app.Scene.RemoveObject(clone); 
                         _app.Scene.SelectedObject = target; 
                     },
                     redoAction: () => { 
+                        if (target.Parent != null) target.Parent.AddChild(clone);
                         _app.Scene.AddObject(clone); 
                         _app.Scene.SelectedObject = clone; 
                     },
-                    onExecute: () => { } // Already executed
+                    onExecute: () => { }
                 ));
-                AddLog($"[Scene] Duplicated {target.Name}");
+                AddLog($"[Scene] Duplicated {target.Name} (offset slightly)");
             }
 
             // UNDO (Ctrl+Z)
@@ -414,7 +437,7 @@ public class UIManager
     }
 
     // ═══ Scene Hierarchy ═════════════════════════════════════════════════════
-    private void RenderSceneHierarchy()
+    private unsafe void RenderSceneHierarchy()
     {
         ImGui.Begin("Scene Hierarchy", GetWindowFlags());
 
@@ -427,15 +450,9 @@ public class UIManager
             if (_app.Scene.SelectedObjects.Count > 1)
             {
                 var groupObj = new SceneObject { Name = "Group" };
-                
                 var firstParent = _app.Scene.SelectedObjects[0].Parent;
                 bool sameParent = _app.Scene.SelectedObjects.All(o => o.Parent == firstParent);
-
-                if (sameParent && firstParent != null)
-                {
-                    firstParent.AddChild(groupObj);
-                }
-                
+                if (sameParent && firstParent != null) firstParent.AddChild(groupObj);
                 _app.Scene.AddObject(groupObj);
 
                 var toMove = _app.Scene.SelectedObjects.ToList();
@@ -444,24 +461,54 @@ public class UIManager
                     if (obj.Parent != null) obj.Parent.Children.Remove(obj);
                     groupObj.AddChild(obj);
                 }
-
                 _app.Scene.SelectedObject = groupObj;
                 AddLog($"[Scene] Grouped {toMove.Count} objects under new parent '{groupObj.Name}'");
             }
         }
 
+        // Use a child window for the list so buttons stay at bottom
+        ImGui.BeginChild("HierarchyList", new Vector2(0, -35), true);
+
         // Only render root-level objects (no parent), children are drawn recursively
-        foreach (var obj in _app.Scene.Objects)
+        foreach (var obj in _app.Scene.Objects.ToList())
         {
-            if (obj.Parent != null) continue; // Skip children, they're drawn under parents
+            if (obj.Parent != null) continue; 
             RenderSceneNode(obj);
         }
 
-        ImGui.Separator();
-
-        if (ImGui.Button("Import FBX"))
+        // Drop on empty space to unparent (move to root)
+        ImGui.Dummy(new Vector2(ImGui.GetContentRegionAvail().X, 50));
+        if (ImGui.BeginDragDropTarget())
         {
-            ImportModelWithDialog();
+            var payload = ImGui.AcceptDragDropPayload("SCENE_OBJ");
+            if (payload.NativePtr != null && _draggedObjects.Count > 0)
+            {
+                foreach (var target in _draggedObjects.ToList())
+                {
+                    if (target.Parent != null)
+                    {
+                        target.Parent.Children.Remove(target);
+                        target.Parent = null; 
+                    }
+                }
+                AddLog($"[Hierarchy] Unparented {_draggedObjects.Count} objects (moved to root)");
+                _draggedObjects.Clear();
+            }
+            ImGui.EndDragDropTarget();
+        }
+        ImGui.EndChild();
+
+        if (ImGui.Button("Import FBX")) ImportModelWithDialog();
+        ImGui.SameLine();
+        if (ImGui.Button("+ Folder"))
+        {
+            var folder = new SceneObject("New Folder");
+            _app.Scene.AddObject(folder);
+            _app.Scene.SelectedObject = folder;
+            _renamingObject = folder;
+            Array.Clear(_renameBuf, 0, _renameBuf.Length);
+            var nameBytes = System.Text.Encoding.UTF8.GetBytes(folder.Name);
+            Array.Copy(nameBytes, _renameBuf, Math.Min(nameBytes.Length, _renameBuf.Length - 1));
         }
 
         ImGui.SameLine();
@@ -472,84 +519,107 @@ public class UIManager
         ImGui.End();
     }
 
-    private void RenderSceneNode(SceneObject obj)
+    private unsafe void RenderSceneNode(SceneObject obj)
     {
         // ── HIDDEN SYSTEM NODES ──
         if (obj.Name.Contains("$AssimpFbx$"))
         {
-            foreach (var child in obj.Children)
+            foreach (var child in obj.Children.ToList())
                 RenderSceneNode(child);
             return;
         }
 
         // Determine icon
-        string icon = obj.Children.Count > 0 ? "[P]" : "[M]";
+        string icon = obj.Children.Count > 0 ? "[F]" : "[M]";
         if (obj.HasComponent<LightComponent>()) icon = "[L]";
         if (obj is Camera) icon = "[C]";
-        if (obj.HasComponent<MeshRendererComponent>() && obj.Children.Count > 0) icon = "[P]";
+        if (obj.HasComponent<MeshRendererComponent>()) icon = "[M]";
 
         bool isSelected = _app.Scene.SelectedObjects.Contains(obj);
         bool hasChildren = obj.Children.Count > 0;
+        
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.OpenOnArrow;
+        if (isSelected) flags |= ImGuiTreeNodeFlags.Selected;
+        if (!hasChildren) flags |= ImGuiTreeNodeFlags.Leaf;
+        if (obj.Parent == null) flags |= ImGuiTreeNodeFlags.DefaultOpen;
 
-        if (hasChildren)
+        bool open;
+        if (_renamingObject == obj)
         {
-            // Collapsible tree node for parents
-            var flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth;
-            if (isSelected) flags |= ImGuiTreeNodeFlags.Selected;
-            // Default open for first level
-            if (obj.Parent == null) flags |= ImGuiTreeNodeFlags.DefaultOpen;
-
-            bool open = ImGui.TreeNodeEx($"{icon} {obj.Name}##{obj.GetHashCode()}", flags);
-            if (ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            ImGui.SetKeyboardFocusHere();
+            if (ImGui.InputText($"##rename{obj.GetHashCode()}", _renameBuf, (uint)_renameBuf.Length, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll))
             {
-                // Accept ImGui's internal modifier state OR Silk.NET's direct hardware state
-                bool isShift = ImGui.GetIO().KeyShift || _app.Input.ShiftHeld || ImGui.IsKeyDown(ImGuiKey.ModShift);
-                bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
-                
-                if (isShift || isCtrl)
-                {
-                    if (isSelected) _app.Scene.SelectedObjects.Remove(obj);
-                    else _app.Scene.SelectedObjects.Add(obj);
-                    AddLog($"[Hierarchy] Multi-Select: {obj.Name}. Total selected: {_app.Scene.SelectedObjects.Count}");
-                }
-                else
-                {
-                    _app.Scene.SelectedObject = obj;
-                    AddLog($"[Hierarchy] Single-Select: {obj.Name}");
-                }
+                obj.Name = System.Text.Encoding.UTF8.GetString(_renameBuf).TrimEnd('\0');
+                _renamingObject = null;
             }
-
-            if (open)
-            {
-                foreach (var child in obj.Children)
-                    RenderSceneNode(child);
-                ImGui.TreePop();
-            }
+            if (!ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left)) _renamingObject = null;
+            open = false; 
         }
         else
         {
-            // Leaf node (no children) - simple selectable
-            var flags = ImGuiTreeNodeFlags.Leaf | ImGuiTreeNodeFlags.NoTreePushOnOpen | ImGuiTreeNodeFlags.SpanAvailWidth;
-            if (isSelected) flags |= ImGuiTreeNodeFlags.Selected;
-
-            ImGui.TreeNodeEx($"{icon} {obj.Name}##{obj.GetHashCode()}", flags);
+            open = ImGui.TreeNodeEx($"{icon} {obj.Name}##{obj.GetHashCode()}", flags);
+            
             if (ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
             {
                 bool isShift = ImGui.GetIO().KeyShift || _app.Input.ShiftHeld || ImGui.IsKeyDown(ImGuiKey.ModShift);
                 bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
-                
                 if (isShift || isCtrl)
                 {
                     if (isSelected) _app.Scene.SelectedObjects.Remove(obj);
                     else _app.Scene.SelectedObjects.Add(obj);
-                    AddLog($"[Hierarchy] Multi-Select: {obj.Name}. Total selected: {_app.Scene.SelectedObjects.Count}");
                 }
                 else
                 {
                     _app.Scene.SelectedObject = obj;
-                    AddLog($"[Hierarchy] Single-Select: {obj.Name}");
                 }
             }
+
+            if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+            {
+                _renamingObject = obj;
+                Array.Clear(_renameBuf, 0, _renameBuf.Length);
+                var nameBytes = System.Text.Encoding.UTF8.GetBytes(obj.Name);
+                Array.Copy(nameBytes, _renameBuf, Math.Min(nameBytes.Length, _renameBuf.Length - 1));
+            }
+
+            if (ImGui.BeginDragDropSource())
+            {
+                if (isSelected) 
+                    _draggedObjects = _app.Scene.SelectedObjects.ToList();
+                else 
+                    _draggedObjects = new List<SceneObject> { obj };
+
+                ImGui.SetDragDropPayload("SCENE_OBJ", IntPtr.Zero, 0);
+                ImGui.Text(_draggedObjects.Count > 1 ? $"Moving {_draggedObjects.Count} objects" : $"Moving {obj.Name}");
+                ImGui.EndDragDropSource();
+            }
+
+            if (ImGui.BeginDragDropTarget())
+            {
+                var payload = ImGui.AcceptDragDropPayload("SCENE_OBJ");
+                if (payload.NativePtr != null && _draggedObjects.Count > 0)
+                {
+                    foreach (var target in _draggedObjects.ToList())
+                    {
+                        if (target == obj) continue;
+                        if (!IsDescendantOf(target, obj))
+                        {
+                            if (target.Parent != null) target.Parent.Children.Remove(target);
+                            obj.AddChild(target);
+                        }
+                    }
+                    AddLog($"[Hierarchy] Parented {_draggedObjects.Count} objects to {obj.Name}");
+                    _draggedObjects.Clear();
+                }
+                ImGui.EndDragDropTarget();
+            }
+        }
+
+        if (open)
+        {
+            foreach (var child in obj.Children.ToList())
+                RenderSceneNode(child);
+            ImGui.TreePop();
         }
     }
 
@@ -558,12 +628,31 @@ public class UIManager
     {
         ImGui.Begin("Viewport", GetWindowFlags(ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar));
         
-        _viewportScreenPos = ImGui.GetCursorScreenPos();
-        var viewportSize = ImGui.GetContentRegionAvail();
-        
+        var availableSize = ImGui.GetContentRegionAvail();
+        int drawW = (int)availableSize.X;
+        int drawH = (int)availableSize.Y;
+
+        var cam = _app.Scene.ActiveCamera;
+        bool isFisheye = cam != null && cam.FisheyeStrength > 0.01f;
+        if (isFisheye)
+        {
+            // Force 1:1 Aspect Ratio for Fisheye lenses
+            drawW = drawH = Math.Min(drawW, drawH);
+        }
+
         // Ensure renderer matches exactly
-        _app.Renderer.ResizeFBOs((int)viewportSize.X, (int)viewportSize.Y);
-        _viewportSize = new Vector2(_app.Renderer.Width, _app.Renderer.Height); // Use int-snapped size for consistency
+        _app.Renderer.ResizeFBOs(drawW, drawH);
+        _viewportSize = new Vector2(drawW, drawH);
+        _viewportScreenPos = ImGui.GetCursorScreenPos();
+        
+        if (isFisheye)
+        {
+            // Center the square viewport in the available space
+            Vector2 offset = (availableSize - _viewportSize) * 0.5f;
+            _viewportScreenPos += offset;
+            ImGui.SetCursorScreenPos(_viewportScreenPos);
+        }
+        
         _viewportHovered = ImGui.IsWindowHovered();
         
         if (_viewportSize.X > 0 && _viewportSize.Y > 0)
@@ -573,6 +662,7 @@ public class UIManager
             
             if (!flyMode)
             {
+
                 HandleManipulationInput();
             }
             else
@@ -589,7 +679,7 @@ public class UIManager
                 _ => _app.Renderer.RGBTexture,
             };
 
-            ImGui.Image((IntPtr)texId, viewportSize, new Vector2(0, 1), new Vector2(1, 0));
+            ImGui.Image((IntPtr)texId, _viewportSize, new Vector2(0, 1), new Vector2(1, 0));
 
             // Overlay tools (Draw ABOVE image)
             DrawObjectGizmo();
@@ -660,14 +750,15 @@ public class UIManager
         var io = ImGui.GetIO();
         var sel = _app.Scene.SelectedObject;
 
-        // Shortcuts for Mode (Tool Selection) — suppressed during fly mode
+        // Shortcuts for Mode (Tool Selection) — uses Silk.NET event-based input (bypasses ImGui focus)
         bool inFly = _app.Scene.ActiveCamera?.IsFlyMode ?? false;
-        if (!inFly)
+        if (!inFly && !ImGui.IsAnyItemActive())
         {
-            if (ImGui.IsKeyPressed(ImGuiKey.W)) { _manipMode = ManipulationMode.Move; _isManipulating = false; }
-            if (ImGui.IsKeyPressed(ImGuiKey.E)) { _manipMode = ManipulationMode.Rotate; _isManipulating = false; }
-            if (ImGui.IsKeyPressed(ImGuiKey.R)) { _manipMode = ManipulationMode.Scale; _isManipulating = false; }
-            if (ImGui.IsKeyPressed(ImGuiKey.Q)) { _manipMode = ManipulationMode.None; _isManipulating = false; _axisLock = '\0'; }
+            var input = _app.Input;
+            if (input.WasKeyJustPressed(Silk.NET.Input.Key.W) && !_isManipulating) { _manipMode = ManipulationMode.Move; _isManipulating = false; }
+            if (input.WasKeyJustPressed(Silk.NET.Input.Key.E) && !_isManipulating) { _manipMode = ManipulationMode.Rotate; _isManipulating = false; }
+            if (input.WasKeyJustPressed(Silk.NET.Input.Key.R) && !_isManipulating) { _manipMode = ManipulationMode.Scale; _isManipulating = false; }
+            if (input.WasKeyJustPressed(Silk.NET.Input.Key.Q)) { _manipMode = ManipulationMode.None; _isManipulating = false; _axisLock = '\0'; }
         }
 
         // Start / Stop Manipulation
@@ -693,49 +784,63 @@ public class UIManager
                 
                 if (!overTools && !overGizmo)
                 {
-                    var color = _app.Renderer.PickSegmentationColor((int)localMouse.X, (int)localMouse.Y);
-                    var found = FindObjectBySegColor(color);
-                    
-                    // Group picking logic: Select the topmost manually-created group parent
-                    // This makes grouped items "stick together" when clicked in the 3D viewport
-                    while (found != null && found.Parent != null && found.Parent.Name.StartsWith("Group"))
+                    var cam = _app.Scene.ActiveCamera;
+                    if (cam != null)
                     {
-                        found = found.Parent;
-                    }
-                    
-                    bool isShift = ImGui.GetIO().KeyShift || _app.Input.ShiftHeld || ImGui.IsKeyDown(ImGuiKey.ModShift);
-                    bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
-
-                    if (found != null)
-                    {
-                        if (isShift || isCtrl)
+                        // Unwarp mouse position if fisheye is active (viewport is distorted but segmentation buffer is not)
+                        var pickPos = localMouse;
+                        if (MathF.Abs(cam.FisheyeStrength) > 0.001f)
                         {
-                            if (_app.Scene.SelectedObjects.Contains(found))
-                                _app.Scene.SelectedObjects.Remove(found);
+                            pickPos = Annotation.KeypointAnnotator.UnwarpFisheye(
+                                localMouse,
+                                (int)_viewportSize.X, (int)_viewportSize.Y,
+                                cam.FisheyeStrength, cam.FieldOfView);
+                        }
+
+                        var color = _app.Renderer.PickSegmentationColor(_app.Scene, cam, (int)pickPos.X, (int)pickPos.Y);
+                        var found = FindObjectBySegColor(color);
+                        
+                        // Group picking logic: Select the topmost manually-created group parent
+                        // This makes grouped items "stick together" when clicked in the 3D viewport
+                        while (found != null && found.Parent != null && found.Parent.Name.StartsWith("Group"))
+                        {
+                            found = found.Parent;
+                        }
+                        
+                        bool isShift = ImGui.GetIO().KeyShift || _app.Input.ShiftHeld || ImGui.IsKeyDown(ImGuiKey.ModShift);
+                        bool isCtrl = ImGui.GetIO().KeyCtrl || _app.Input.CtrlHeld || ImGui.IsKeyDown(ImGuiKey.ModCtrl);
+
+                        if (found != null)
+                        {
+                            if (isShift || isCtrl)
+                            {
+                                if (_app.Scene.SelectedObjects.Contains(found))
+                                    _app.Scene.SelectedObjects.Remove(found);
+                                else
+                                    _app.Scene.SelectedObjects.Add(found);
+                                AddLog($"[Scene] Multi-Selected: {found.Name}. Total selected: {_app.Scene.SelectedObjects.Count}");
+                            }
                             else
-                                _app.Scene.SelectedObjects.Add(found);
-                            AddLog($"[Scene] Multi-Selected: {found.Name}. Total selected: {_app.Scene.SelectedObjects.Count}");
+                            {
+                                _app.Scene.SelectedObject = found;
+                                AddLog($"[Scene] Selected: {found.Name}");
+                            }
+                            
+                            sel = _app.Scene.SelectedObject; // Update local var for manipulation
+                            if (_manipMode != ManipulationMode.None && sel != null)
+                            {
+                                StartManipulation(sel, _manipMode);
+                                _startedByMouse = true;
+                            }
                         }
                         else
                         {
-                            _app.Scene.SelectedObject = found;
-                            AddLog($"[Scene] Selected: {found.Name}");
-                        }
-                        
-                        sel = _app.Scene.SelectedObject; // Update local var for manipulation
-                        if (_manipMode != ManipulationMode.None && sel != null)
-                        {
-                            StartManipulation(sel, _manipMode);
-                            _startedByMouse = true;
-                        }
-                    }
-                    else
-                    {
-                        if (!isShift && !isCtrl)
-                        {
-                            // Deselect if clicking background without modifiers
-                            _app.Scene.SelectedObject = null;
-                            sel = null;
+                            if (!isShift && !isCtrl)
+                            {
+                                // Deselect if clicking background without modifiers
+                                _app.Scene.SelectedObject = null;
+                                sel = null;
+                            }
                         }
                     }
                 }
@@ -764,6 +869,7 @@ public class UIManager
             if (_manipMode == ManipulationMode.Rotate) sensitivity = 0.5f;
             if (_manipMode == ManipulationMode.Scale) sensitivity = 0.005f;
 
+            // Group delta application
             var cam = _app.Scene.ActiveCamera;
             Vector3 camFront = Vector3.UnitZ;
             if (cam != null)
@@ -774,79 +880,161 @@ public class UIManager
             Vector3 camRight = Vector3.Normalize(Vector3.Cross(camFront, Vector3.UnitY));
             Vector3 camUp = Vector3.Normalize(Vector3.Cross(camRight, camFront));
 
-            float dist = cam != null ? cam.OrbitDistance : 10f;
+            float dist = Vector3.Distance(cam.Transform.Position, sel.Transform.Position);
             float moveSense = dist * 0.003f;
+
+            // Using cached top-most selection to avoid double-moving children
+            var topSelection = _topSelection;
 
             if (_manipMode == ManipulationMode.Move)
             {
                 Vector3 move = (camRight * mouseDelta.X - camUp * mouseDelta.Y) * moveSense;
-                if (_axisLock == 'X') move = new Vector3(mouseDelta.X * moveSense, 0, 0);
-                if (_axisLock == 'Y') move = new Vector3(0, -mouseDelta.Y * moveSense, 0);
-                if (_axisLock == 'Z') move = new Vector3(0, 0, -mouseDelta.Y * moveSense);
                 
-                var kp = sel.GetComponent<KeypointComponent>();
-                if (kp != null && !string.IsNullOrEmpty(kp.BoundBoneName))
+                if (_axisLock == 'X' || _axisLock == 'Y' || _axisLock == 'Z')
                 {
-                    // If bound to a bone, we update the BoneOffset instead of world position
-                    // We need the bone's current world-ish matrix
-                    var kpRoot = sel.Parent;
-                    while (kpRoot != null && kpRoot.Parent != null) kpRoot = kpRoot.Parent;
-                    if (kpRoot != null)
+                    Vector3 axis = _axisLock == 'X' ? Vector3.UnitX : (_axisLock == 'Y' ? Vector3.UnitY : Vector3.UnitZ);
+                    
+                    // Project the axis onto the screen to find the visual direction 
+                    WorldToScreen(sel.Transform.Position, out Vector2 p0);
+                    WorldToScreen(sel.Transform.Position + axis, out Vector2 p1);
+                    
+                    Vector2 screenDir = p1 - p0;
+                    if (screenDir.LengthSquared() > 0.0001f)
                     {
-                        var (skinnedObj, mr) = FindSkinnedMeshInHierarchy(kpRoot);
-                        if (mr?.Mesh?.Skeleton != null && mr.Mesh.Skeleton.BonesByName.TryGetValue(kp.BoundBoneName, out var bone))
-                        {
-                            var modelObj = skinnedObj ?? kpRoot;
-                            var boneInModel = bone.GlobalTransform * mr.Mesh.Skeleton.GlobalInverseTransform;
-                            var objectWorldMatrix = modelObj.GetWorldMatrix();
-                            var jointWorld = boneInModel * objectWorldMatrix;
-                            
-                            // Convert world-space movement into bone-local space
-                            Matrix4x4.Invert(jointWorld, out var invJointWorld);
-                            invJointWorld.M41 = invJointWorld.M42 = invJointWorld.M43 = 0; // Ignore translation for DELTA move
-                            
-                            Vector3 localMove = Vector3.Transform(move, invJointWorld);
-                            kp.BoneOffset = _initialBoneOffset + localMove;
-                        }
+                        screenDir = Vector2.Normalize(screenDir);
+                        // The amount of drag along the axis's screen projection
+                        float delta = Vector2.Dot(mouseDelta, screenDir);
+                        move = axis * delta * moveSense;
+                    }
+                    else
+                    {
+                        // Fallback: Axis is perpendicular to screen, use vertical mouse movement
+                        move = axis * (-mouseDelta.Y) * moveSense;
                     }
                 }
-                else
+
+                foreach (var target in topSelection)
                 {
-                    sel.Transform.Position = _initialTransformValue + move;
+                    var startState = _initialSelectedState[target];
+                    
+                    var kp = target.GetComponent<KeypointComponent>();
+                    if (kp != null && !string.IsNullOrEmpty(kp.BoundBoneName))
+                    {
+                        var kpRoot = target.Parent;
+                        while (kpRoot != null && kpRoot.Parent != null) kpRoot = kpRoot.Parent;
+                        if (kpRoot != null)
+                        {
+                            var (skinnedObj, mr) = FindSkinnedMeshInHierarchy(kpRoot);
+                            if (mr?.Mesh?.Skeleton != null && mr.Mesh.Skeleton.BonesByName.TryGetValue(kp.BoundBoneName, out var bone))
+                            {
+                                var modelObj = skinnedObj ?? kpRoot;
+                                var boneInModel = bone.GlobalTransform * mr.Mesh.Skeleton.GlobalInverseTransform;
+                                var jointWorld = boneInModel * modelObj.GetWorldMatrix();
+                                Matrix4x4.Invert(jointWorld, out var invJointWorld);
+                                invJointWorld.M41 = invJointWorld.M42 = invJointWorld.M43 = 0;
+                                Vector3 localMove = Vector3.Transform(move, invJointWorld);
+                                kp.BoneOffset = _initialBoneOffset + localMove; // Note: _initialBoneOffset only works for single active selection right now
+                            }
+                        }
+                    }
+                    else
+                    {
+                        target.Transform.Position = startState.Pos + move;
+                    }
                 }
             }
             else if (_manipMode == ManipulationMode.Rotate)
             {
-                float rotSense = 0.5f;
-                float rot = mouseDelta.X * rotSense;
+                WorldToScreen(sel.Transform.Position, out Vector2 center);
+                Vector3 axis = _axisLock == 'X' ? Vector3.UnitX : (_axisLock == 'Z' ? Vector3.UnitZ : Vector3.UnitY);
+                if (_axisLock == '\0') axis = Vector3.UnitY;
+
+                // Determine rotation direction by projecting a 1-degree rotation into screen space
+                // This ensures rotation always follows the mouse correctly regardless of camera angle.
+                Vector3 orth = Vector3.Normalize(Vector3.Cross(axis, camFront));
+                if (orth.LengthSquared() < 0.001f) orth = Vector3.Normalize(Vector3.Cross(axis, Vector3.UnitY));
+                if (orth.LengthSquared() < 0.001f) orth = Vector3.Normalize(Vector3.Cross(axis, Vector3.UnitX));
+
+                Vector3 pStart = sel.Transform.Position + orth * 0.5f;
+                var rotQ = Quaternion.CreateFromAxisAngle(axis, 5.0f * MathF.PI / 180f); // 5 degree test
+                Vector3 pEnd = sel.Transform.Position + Vector3.Transform(orth * 0.5f, rotQ);
+
+                WorldToScreen(pStart, out Vector2 s0);
+                WorldToScreen(pEnd, out Vector2 s1);
+                
+                Vector2 screenRotDir = s1 - s0;
+                float angle = 0f;
+                if (screenRotDir.LengthSquared() > 0.01f)
+                {
+                    screenRotDir = Vector2.Normalize(screenRotDir);
+                    // Match mouse drag to the projected rotation direction
+                    angle = Vector2.Dot(mouseDelta, screenRotDir) * 1.5f; // sensitivity
+                }
+                else
+                {
+                    // Fallback to circular/horizontal if axis is pointing straight at camera
+                    Vector2 dragVec = io.MousePos - center;
+                    float a1 = MathF.Atan2(_initialMousePos.Y - center.Y, _initialMousePos.X - center.X);
+                    float a2 = MathF.Atan2(io.MousePos.Y - center.Y, io.MousePos.X - center.X);
+                    angle = (a2 - a1) * 180f / MathF.PI;
+                    if (Vector3.Dot(camFront, axis) > 0) angle = -angle;
+                }
+
+                angle = -angle; // Flip for user preference / consistency
+
                 Vector3 r = Vector3.Zero;
-                if (_axisLock == 'X') r.X = rot;
-                else if (_axisLock == 'Y') r.Y = rot;
-                else if (_axisLock == 'Z') r.Z = rot;
-                else r.Y = rot;
-                sel.Transform.Rotation = _initialTransformValue + r;
+                if (_axisLock == 'X') r.X = angle;
+                else if (_axisLock == 'Y') r.Y = angle; 
+                else if (_axisLock == 'Z') r.Z = angle;
+                else r.Y = angle;
+
+                foreach (var target in topSelection)
+                {
+                    target.Transform.Rotation = _initialSelectedState[target].Rot + r;
+                }
             }
             else if (_manipMode == ManipulationMode.Scale)
             {
-                float s = 1.0f + mouseDelta.X * sensitivity;
+                float delta = (_axisLock == 'U')
+                    ? (mouseDelta.X - mouseDelta.Y) * sensitivity  // diagonal: right/up = bigger
+                    : mouseDelta.X * sensitivity;
+                float s = 1.0f + delta;
                 if (s < 0.01f) s = 0.01f;
                 Vector3 scale = new Vector3(s);
                 if (_axisLock == 'X') scale = new Vector3(s, 1, 1);
                 else if (_axisLock == 'Y') scale = new Vector3(1, s, 1);
                 else if (_axisLock == 'Z') scale = new Vector3(1, 1, s);
-                // 'U' or '\0' results in uniform scale
-                sel.Transform.Scale = _initialTransformValue * scale;
+
+                foreach (var target in topSelection)
+                {
+                    target.Transform.Scale = _initialSelectedState[target].Sca * scale;
+                }
             }
 
             // Confirm / Cancel
             if (_startedByMouse)
             {
-                if (ImGui.IsMouseReleased(ImGuiMouseButton.Left)) { _isManipulating = false; _axisLock = '\0'; }
+                if (ImGui.IsMouseReleased(ImGuiMouseButton.Left)) 
+                { 
+                    CommitManipulation();
+                    _isManipulating = false; 
+                    _axisLock = '\0'; 
+                }
             }
             else
             {
-                if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || ImGui.IsKeyPressed(ImGuiKey.Enter)) { _isManipulating = false; _axisLock = '\0'; }
-                if (ImGui.IsMouseClicked(ImGuiMouseButton.Right) || ImGui.IsKeyPressed(ImGuiKey.Escape)) { CancelManipulation(sel); _isManipulating = false; _axisLock = '\0'; }
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || ImGui.IsKeyPressed(ImGuiKey.Enter)) 
+                { 
+                    CommitManipulation();
+                    _isManipulating = false; 
+                    _axisLock = '\0'; 
+                }
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Right) || ImGui.IsKeyPressed(ImGuiKey.Escape)) 
+                { 
+                    CancelManipulation(sel); 
+                    _isManipulating = false; 
+                    _axisLock = '\0'; 
+                }
             }
         }
     }
@@ -875,6 +1063,7 @@ public class UIManager
             {
                 _manipMode = toolModes[i];
                 _isManipulating = false;
+                _heldToolKey = ImGuiKey.None; // Toolbar click = persistent, not hold-to-use
             }
             
             var text = toolIcons[i];
@@ -1005,7 +1194,8 @@ public class UIManager
         _hoveredAxis = '\0';
         Vector2 mousePos = ImGui.GetMousePos();
         
-        float gizmoScale = cam.OrbitDistance * 0.12f;
+        float distToObj = Vector3.Distance(cam.Transform.Position, worldPos);
+        float gizmoScale = distToObj * 0.12f;
 
         // Uniform scale handle (center box)
         if (_manipMode == ManipulationMode.Scale)
@@ -1076,7 +1266,8 @@ public class UIManager
                 // Move or Scale (Standard axis lines)
                 if (WorldToScreen(worldPos + axis * gizmoScale, out Vector2 screenEnd))
                 {
-                    bool isHovered = canHover && (IsMouseNearLine(mousePos, screenOrigin, screenEnd, 12f) || IsMouseNearPoint(mousePos, screenEnd, 18f));
+                    // Don't let axis hover steal from center uniform handle
+                    bool isHovered = canHover && _hoveredAxis != 'U' && (IsMouseNearLine(mousePos, screenOrigin, screenEnd, 12f) || IsMouseNearPoint(mousePos, screenEnd, 18f));
                     if (isHovered) _hoveredAxis = axisChar;
 
                     Vector4 drawColor = color;
@@ -1317,12 +1508,24 @@ public class UIManager
         if (color == Vector3.Zero) return null;
         foreach (var obj in _app.Scene.Objects)
         {
-            var label = obj.GetComponent<LabelComponent>();
-            if (label != null)
-            {
-                if (Vector3.Distance(label.SegmentationColor, color) < 0.02f)
-                    return obj;
-            }
+            if (Vector3.Distance(obj.PickingColor, color) < 0.01f)
+                return obj;
+            
+            // Also search children
+            var found = FindInHierarchy(obj, color);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private SceneObject? FindInHierarchy(SceneObject obj, Vector3 color)
+    {
+        foreach (var child in obj.Children)
+        {
+            if (Vector3.Distance(child.PickingColor, color) < 0.01f)
+                return child;
+            var found = FindInHierarchy(child, color);
+            if (found != null) return found;
         }
         return null;
     }
@@ -1332,29 +1535,81 @@ public class UIManager
         _isManipulating = true;
         _manipMode = mode;
         _initialMousePos = ImGui.GetIO().MousePos;
-        // Keep _axisLock if set by gizmo
-        if (mode == ManipulationMode.Move) 
+        
+        _initialSelectedState.Clear();
+        var selection = _app.Scene.SelectedObjects.ToList();
+        if (!selection.Contains(obj)) selection.Add(obj);
+
+        foreach (var selected in selection)
         {
-            _initialTransformValue = obj.Transform.Position;
-            var kp = obj.GetComponent<KeypointComponent>();
-            if (kp != null) _initialBoneOffset = kp.BoneOffset;
+            _initialSelectedState[selected] = new TransformState {
+                Pos = selected.Transform.Position,
+                Rot = selected.Transform.Rotation,
+                Sca = selected.Transform.Scale
+            };
         }
+
+        // Cache top-level selection to avoid expensive per-frame recursion
+        _topSelection = selection.Where(s => !IsAnyParentSelected(s, selection)).ToList();
+
+        _initialTransformValue = obj.Transform.Position;
         if (mode == ManipulationMode.Rotate) _initialTransformValue = obj.Transform.Rotation;
         if (mode == ManipulationMode.Scale) _initialTransformValue = obj.Transform.Scale;
+        
+        var kp = obj.GetComponent<KeypointComponent>();
+        if (kp != null) _initialBoneOffset = kp.BoneOffset;
+    }
+
+    private void CommitManipulation()
+    {
+        if (_initialSelectedState.Count == 0) return;
+
+        // Capture end state
+        var endState = new Dictionary<SceneObject, TransformState>();
+        foreach (var kvp in _initialSelectedState)
+        {
+            var obj = kvp.Key;
+            endState[obj] = new TransformState {
+                Pos = obj.Transform.Position,
+                Rot = obj.Transform.Rotation,
+                Sca = obj.Transform.Scale
+            };
+        }
+
+        // Capture initial state (snapshot for command)
+        var startState = new Dictionary<SceneObject, TransformState>(_initialSelectedState);
+
+        _app.CommandHistory.Push(new Commands.ActionCommand(
+            undoAction: () => {
+                foreach (var kvp in startState) {
+                    var obj = kvp.Key;
+                    obj.Transform.Position = kvp.Value.Pos;
+                    obj.Transform.Rotation = kvp.Value.Rot;
+                    obj.Transform.Scale = kvp.Value.Sca;
+                }
+            },
+            redoAction: () => {
+                foreach (var kvp in endState) {
+                    var obj = kvp.Key;
+                    obj.Transform.Position = kvp.Value.Pos;
+                    obj.Transform.Rotation = kvp.Value.Rot;
+                    obj.Transform.Scale = kvp.Value.Sca;
+                }
+            }
+        ));
+        
+        _initialSelectedState.Clear();
     }
 
     private void CancelManipulation(SceneObject? obj)
     {
-        if (obj != null)
+        foreach (var kvp in _initialSelectedState)
         {
-            if (_manipMode == ManipulationMode.Move) 
-            {
-                obj.Transform.Position = _initialTransformValue;
-                var kp = obj.GetComponent<KeypointComponent>();
-                if (kp != null) kp.BoneOffset = _initialBoneOffset;
-            }
-            if (_manipMode == ManipulationMode.Rotate) obj.Transform.Rotation = _initialTransformValue;
-            if (_manipMode == ManipulationMode.Scale) obj.Transform.Scale = _initialTransformValue;
+            var target = kvp.Key;
+            var state = kvp.Value;
+            target.Transform.Position = state.Pos;
+            target.Transform.Rotation = state.Rot;
+            target.Transform.Scale = state.Sca;
         }
     }
 
@@ -1609,7 +1864,7 @@ public class UIManager
                 ImGui.ProgressBar(time / Math.Max(duration, 0.001f), new Vector2(-1, 0), $"{time:F2}s / {duration:F2}s");
             }
             
-            if (ImGui.SliderFloat("Time", ref anim.PlaybackTime, 0, anim.ClipDurationSeconds))
+            if (ImGui.DragFloat("Time", ref anim.PlaybackTime, 0.01f, 0, anim.ClipDurationSeconds))
             {
                 anim.IsPlaying = false;
                 SyncAnimationState(animObj, anim);
@@ -1660,7 +1915,7 @@ public class UIManager
 
         // ── Pose Keypoint Setup ──
         ImGui.Separator();
-        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), "🦴 Pose Estimation Standard");
+        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), "Bone Mapping");
 
         // Always resolve to root parent for keypoint checking
         var kpRoot = sel;
@@ -1677,7 +1932,7 @@ public class UIManager
 
         var std = Annotation.KeypointRegistry.GetStandard(kpRoot.PoseStandard);
         ImGui.Spacing();
-        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), $"🦴 {std.Name} Keypoints");
+        ImGui.TextColored(new Vector4(0.3f, 1f, 0.6f, 1), $"{std.Name} Keypoints");
 
         int kpCount = CountKeypointChildren(kpRoot);
 
@@ -1746,7 +2001,7 @@ public class UIManager
 
         if (kpCount == 0)
         {
-            if (ImGui.Button($"🦴 Setup {std.Name}", new Vector2(-1, 0)))
+            if (ImGui.Button($"Setup {std.Name}", new Vector2(-1, 0)))
             {
                 SetupKeypointsForObject(sel, sel.PoseStandard);
                 AddLog($"[Pose] Created {std.Keypoints.Count} {std.Name} keypoint nodes under {sel.Name}");
@@ -1781,7 +2036,7 @@ public class UIManager
                 }
             }
 
-            if (ImGui.Button("🗑 Remove All Keypoints", new Vector2(-1, 0)))
+            if (ImGui.Button("Remove All Keypoints", new Vector2(-1, 0)))
             {
                 RemoveKeypointsFromObject(kpRoot);
                 AddLog($"[Pose] Removed all keypoint nodes from {kpRoot.Name}");
@@ -1992,7 +2247,7 @@ public class UIManager
         }
 
         ImGui.Separator();
-        if (ImGui.Button("🗑 Delete Object", new Vector2(-1, 0)))
+        if (ImGui.Button("Delete Object", new Vector2(-1, 0)))
         {
             _app.Scene.RemoveObject(sel);
         }
@@ -2008,6 +2263,8 @@ public class UIManager
         string? lastCategory = null;
         foreach (var r in _allRandomizers)
         {
+            if (r.Category == "Object") continue;
+
             if (r.Category != lastCategory)
             {
                 if (lastCategory != null) ImGui.Separator();
@@ -2016,89 +2273,30 @@ public class UIManager
             }
 
             var sel_obj = _app.Scene.SelectedObject;
-
-            if (r.Category == "Object")
+            
+            bool enabled = r.Enabled;
+            if (ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref enabled))
             {
-                bool active = false;
-                if (sel_obj != null)
-                {
-                    if (r.Name == "Position") active = sel_obj.HasComponent<PositionRandomizerComponent>();
-                    else if (r.Name == "Rotation") active = sel_obj.HasComponent<RotationRandomizerComponent>();
-                    else if (r.Name == "Scale") active = sel_obj.HasComponent<ScaleRandomizerComponent>();
-                    else if (r.Name == "Texture") active = sel_obj.HasComponent<TextureRandomizerComponent>();
-                    else if (r.Name == "Material") active = sel_obj.HasComponent<MaterialRandomizerComponent>();
-                    else if (r.Name == "Depth Scale") active = sel_obj.HasComponent<DepthScaleComponent>();
-                }
-
-                ImGui.BeginDisabled(sel_obj == null);
-                if (ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref active) && sel_obj != null)
-                {
-                    if (active) 
-                    {
-                        if (r.Name == "Position") sel_obj.AddComponent(new PositionRandomizerComponent());
-                        else if (r.Name == "Rotation") sel_obj.AddComponent(new RotationRandomizerComponent());
-                        else if (r.Name == "Scale") sel_obj.AddComponent(new ScaleRandomizerComponent());
-                        else if (r.Name == "Texture") sel_obj.AddComponent(new TextureRandomizerComponent());
-                        else if (r.Name == "Material") sel_obj.AddComponent(new MaterialRandomizerComponent());
-                        else if (r.Name == "Depth Scale") sel_obj.AddComponent(new DepthScaleComponent());
-                    }
-                    else
-                    {
-                        if (r.Name == "Position") sel_obj.RemoveComponent<PositionRandomizerComponent>();
-                        else if (r.Name == "Rotation") sel_obj.RemoveComponent<RotationRandomizerComponent>();
-                        else if (r.Name == "Scale") sel_obj.RemoveComponent<ScaleRandomizerComponent>();
-                        else if (r.Name == "Texture") sel_obj.RemoveComponent<TextureRandomizerComponent>();
-                        else if (r.Name == "Material") sel_obj.RemoveComponent<MaterialRandomizerComponent>();
-                        else if (r.Name == "Depth Scale") sel_obj.RemoveComponent<DepthScaleComponent>();
-                    }
-                }
-                ImGui.EndDisabled();
-
-                if (sel_obj == null)
-                {
-                    ImGui.SameLine();
-                    ImGui.TextDisabled("(No Selection)");
-                }
-                else if (active)
-                {
-                    ImGui.SameLine();
-                    if (ImGui.TreeNode($"[*]##{r.GetHashCode()}"))
-                    {
-                        ImGui.Indent(10);
-                        r.DrawConfigUI(_app.Scene);
-                        ImGui.Unindent(10);
-                        ImGui.TreePop();
-                    }
-                }
+                r.Enabled = enabled;
+                r.OnToggle(_app.Scene, enabled);
             }
-            else 
+
+            if (r.Enabled)
             {
-                bool enabled = r.Enabled;
-                if (ImGui.Checkbox($"{r.Name}##{r.GetHashCode()}", ref enabled))
+                ImGui.SameLine();
+                if (ImGui.TreeNode($"[*]##{r.GetHashCode()}"))
                 {
-                    r.Enabled = enabled;
-                    r.OnToggle(_app.Scene, enabled);
+                    ImGui.Indent(10);
+                    r.DrawConfigUI(_app.Scene);
+                    ImGui.Unindent(10);
+                    ImGui.TreePop();
                 }
 
-                if (r.Enabled)
+                if (r is HDRIRandomizer hr && hr.NeedsRefresh)
                 {
-                    ImGui.SameLine();
-                    if (ImGui.TreeNode($"[*]##{r.GetHashCode()}"))
-                    {
-                        ImGui.Indent(10);
-                        r.DrawConfigUI(_app.Scene);
-                        ImGui.Unindent(10);
-                        ImGui.TreePop();
-                    }
-
-                    if (r is HDRIRandomizer hr && hr.NeedsRefresh)
-                    {
-                        // If it's just a refresh (deleted file), don't show dialog
-                        if (hr.CurrentHDRI == null) RefreshHDRIs();
-                        else ImportHdriWithDialog();
-                        
-                        hr.NeedsRefresh = false;
-                    }
+                    if (hr.CurrentHDRI == null) RefreshHDRIs();
+                    else ImportHdriWithDialog();
+                    hr.NeedsRefresh = false;
                 }
             }
         }
@@ -2134,7 +2332,7 @@ public class UIManager
             string[] qualNames = { "Low", "High", "Ultra" };
             ImGui.Combo("Wave Mesh Quality:", ref cfg.WaveMeshQualityIndex, qualNames, qualNames.Length);
             
-            ImGui.SliderFloat("Updates per Second:", ref cfg.UpdatesPerSecond, 1, 120);
+            ImGui.DragFloat("Updates per Second:", ref cfg.UpdatesPerSecond, 1f, 1, 120);
             
             ImGui.ColorEdit3("Water Color:", ref cfg.WaterColor, ImGuiColorEditFlags.NoInputs);
             ImGui.ColorEdit3("Foam Color:", ref cfg.FoamColor, ImGuiColorEditFlags.NoInputs);
@@ -2147,19 +2345,19 @@ public class UIManager
                 if (ImGui.BeginTabItem("Cascade 1"))
                 {
                     ImGui.DragFloat2("Tile Length:", ref cfg.TileLength, 1f, 1f, 500f);
-                    ImGui.SliderFloat("Time Scale:", ref cfg.TimeScale, 0f, 10f);
+                    ImGui.DragFloat("Time Scale:", ref cfg.TimeScale, 0.05f, 0f, 10f);
                     
                     ImGui.Separator();
-                    ImGui.SliderFloat("Wind Speed:", ref cfg.WindSpeed, 0f, 60f);
-                    ImGui.SliderFloat("Wind Direction:", ref cfg.WindDirection, -360f, 360f, "%.0f deg");
-                    ImGui.SliderFloat("Fetch Length:", ref cfg.FetchLength, 0.1f, 1000f);
-                    ImGui.SliderFloat("Swell:", ref cfg.Swell, 0f, 1f);
-                    ImGui.SliderFloat("Detail:", ref cfg.Detail, 0f, 1f);
-                    ImGui.SliderFloat("Spread:", ref cfg.Spread, 0f, 1f);
+                    ImGui.DragFloat("Wind Speed:", ref cfg.WindSpeed, 0.5f, 0f, 60f);
+                    ImGui.DragFloat("Wind Direction:", ref cfg.WindDirection, 1f, -360f, 360f, "%.0f deg");
+                    ImGui.DragFloat("Fetch Length:", ref cfg.FetchLength, 1f, 0.1f, 1000f);
+                    ImGui.DragFloat("Swell:", ref cfg.Swell, 0.01f, 0f, 1f);
+                    ImGui.DragFloat("Detail:", ref cfg.Detail, 0.01f, 0f, 1f);
+                    ImGui.DragFloat("Spread:", ref cfg.Spread, 0.01f, 0f, 1f);
                     
                     ImGui.Separator();
-                    ImGui.SliderFloat("Whitecap:", ref cfg.Whitecap, 0f, 2f);
-                    ImGui.SliderFloat("Foam Amount:", ref cfg.FoamAmount, 0f, 10f);
+                    ImGui.DragFloat("Whitecap:", ref cfg.Whitecap, 0.01f, 0f, 2f);
+                    ImGui.DragFloat("Foam Amount:", ref cfg.FoamAmount, 0.1f, 0f, 10f);
                     
                     ImGui.EndTabItem();
                 }
@@ -2175,7 +2373,7 @@ public class UIManager
                 ImGui.Text($"Camera Position: ({camPos.X:F2}, {camPos.Y:F2}, {camPos.Z:F2})");
                 
                 float fov = cam.FieldOfView;
-                if (ImGui.SliderFloat("Camera FOV:", ref fov, 10, 170))
+                if (ImGui.DragFloat("Camera FOV:", ref fov, 0.5f, 10, 170))
                     cam.FieldOfView = fov;
             }
 
@@ -2242,7 +2440,7 @@ public class UIManager
             cap.SubFramesPerIteration = subFrames;
 
             float animDur = cap.AnimationDuration;
-            ImGui.SliderFloat("Anim Duration (s)", ref animDur, 0.1f, 10f);
+            ImGui.DragFloat("Anim Duration (s)", ref animDur, 0.05f, 0.1f, 10f);
             cap.AnimationDuration = animDur;
 
             ImGui.TextColored(new Vector4(0.5f, 0.8f, 1f, 1), 
@@ -2403,27 +2601,27 @@ public class UIManager
         ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f), "Hyperparameters");
 
         int epochs = tm.Epochs;
-        if (ImGui.SliderInt("Epochs", ref epochs, 1, 500))
+        if (ImGui.DragInt("Epochs", ref epochs, 1, 1, 500))
             tm.Epochs = epochs;
 
         int batch = tm.BatchSize;
-        if (ImGui.SliderInt("Batch Size", ref batch, 1, 128))
+        if (ImGui.DragInt("Batch Size", ref batch, 1, 1, 128))
             tm.BatchSize = batch;
 
         int imgSize = tm.ImgSize;
-        if (ImGui.SliderInt("Image Size", ref imgSize, 320, 1280))
+        if (ImGui.DragInt("Image Size", ref imgSize, 16, 320, 1280))
             tm.ImgSize = imgSize;
 
         float lr = tm.LearningRate;
-        if (ImGui.SliderFloat("Learning Rate", ref lr, 0.0001f, 0.1f, "%.6f", ImGuiSliderFlags.Logarithmic))
+        if (ImGui.DragFloat("Learning Rate", ref lr, 0.0001f, 0.0001f, 0.1f, "%.6f"))
             tm.LearningRate = lr;
 
         int patience = tm.Patience;
-        if (ImGui.SliderInt("Patience", ref patience, 0, 100))
+        if (ImGui.DragInt("Patience", ref patience, 1, 0, 100))
             tm.Patience = patience;
 
         int workers = tm.Workers;
-        if (ImGui.SliderInt("Workers", ref workers, 0, 16))
+        if (ImGui.DragInt("Workers", ref workers, 1, 0, 16))
             tm.Workers = workers;
 
         ImGui.Separator();
@@ -2432,7 +2630,7 @@ public class UIManager
         ImGui.TextColored(new Vector4(1f, 0.8f, 0.3f, 1f), "Dataset");
 
         float split = tm.TrainValSplit;
-        if (ImGui.SliderFloat("Train/Val Split", ref split, 0.5f, 0.95f, "%.2f"))
+        if (ImGui.DragFloat("Train/Val Split", ref split, 0.01f, 0.5f, 0.95f, "%.2f"))
             tm.TrainValSplit = split;
 
         bool resume = tm.ResumeTraining;
@@ -2875,6 +3073,27 @@ public class UIManager
             SyncAnimRecursive(child, source);
     }
 
+    private bool IsAnyParentSelected(SceneObject obj, List<SceneObject> selection)
+    {
+        var curr = obj.Parent;
+        while (curr != null)
+        {
+            if (selection.Contains(curr)) return true;
+            curr = curr.Parent;
+        }
+        return false;
+    }
+
+    private bool IsDescendantOf(SceneObject parent, SceneObject potentialDescendant)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child == potentialDescendant) return true;
+            if (IsDescendantOf(child, potentialDescendant)) return true;
+        }
+        return false;
+    }
+
     // ── Undoable UI Wrappers ──
     private object? _dragInitialValue;
 
@@ -2921,7 +3140,8 @@ public class UIManager
     private bool UndoableSliderFloat(string label, float currentValue, Action<float> setter, float min, float max)
     {
         float val = currentValue;
-        bool changed = ImGui.SliderFloat(label, ref val, min, max);
+        float speed = (max - min) * 0.005f; // Auto speed: 0.5% of range per pixel
+        bool changed = ImGui.DragFloat(label, ref val, speed, min, max);
         
         if (ImGui.IsItemActivated()) _dragInitialValue = currentValue;
         if (changed) setter(val);

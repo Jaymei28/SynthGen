@@ -7,7 +7,7 @@ namespace SynthGen.Annotation;
 /// Maps keypoint indices to names and provides default bone name mappings
 /// for common Mixamo/FBX skeletons.
 /// </summary>
-public enum PoseStandardType { COCO, Fisheye }
+public enum PoseStandardType { COCO, Fisheye, Halpe26 }
 
 public class PoseStandard
 {
@@ -37,7 +37,7 @@ public static class KeypointRegistry
         {
             {0, new[]{"head"}}, {1, new[]{"lefteye"}}, {2, new[]{"righteye"}}, {3, new[]{"leftear"}}, {4, new[]{"rightear"}},
             {5, new[]{"leftshoulder", "Shoulder_L"}}, {6, new[]{"rightshoulder", "Shoulder_R"}},
-            {7, new[]{"leftforearm", "Elbow_L"}}, {8, new[]{"rightforearm", "Elbow_R"}},
+            {7, new[]{"leftarm", "leftforearm", "Elbow_L"}}, {8, new[]{"rightarm", "rightforearm", "Elbow_R"}},
             {9, new[]{"lefthand", "Hand_L"}}, {10, new[]{"righthand", "Hand_R"}},
             {11, new[]{"leftupleg", "Thigh_L"}}, {12, new[]{"rightupleg", "Thigh_R"}},
             {13, new[]{"leftleg", "Shin_L"}}, {14, new[]{"rightleg", "Shin_R"}},
@@ -71,16 +71,56 @@ public static class KeypointRegistry
             {1, new[]{"spine02", "Spine02", "Chest", "spine1", "Spine1"}},
             {2, new[]{"leftshoulder", "Shoulder_L"}},
             {3, new[]{"rightshoulder", "Shoulder_R"}},
-            {4, new[]{"leftforearm", "Elbow_L"}},
-            {5, new[]{"rightforearm", "Elbow_R"}},
+            {4, new[]{"leftarm", "leftforearm", "Elbow_L"}},
+            {5, new[]{"rightarm", "rightforearm", "Elbow_R"}},
             {6, new[]{"lefthand", "Hand_L"}},
             {7, new[]{"righthand", "Hand_R"}}
+        }
+    };
+
+    public static readonly PoseStandard Halpe26 = new PoseStandard
+    {
+        Name = "YOLO Halpe 26",
+        Keypoints = new Dictionary<int, string>
+        {
+            {0, "Nose"}, {1, "Left Eye"}, {2, "Right Eye"}, {3, "Left Ear"}, {4, "Right Ear"},
+            {5, "Left Shoulder"}, {6, "Right Shoulder"}, {7, "Left Elbow"}, {8, "Right Elbow"},
+            {9, "Left Wrist"}, {10, "Right Wrist"}, {11, "Left Hip"}, {12, "Right Hip"},
+            {13, "Left Knee"}, {14, "Right Knee"}, {15, "Left Ankle"}, {16, "Right Ankle"},
+            {17, "Head"}, {18, "Neck"}, {19, "Hip"}, {20, "Left Big Toe"}, {21, "Right Big Toe"},
+            {22, "Left Small Toe"}, {23, "Right Small Toe"}, {24, "Left Heel"}, {25, "Right Heel"}
+        },
+        Edges = new[] {
+            (0, 1), (0, 2), (1, 3), (2, 4),         // Face
+            (17, 18), (18, 5), (18, 6), (18, 19),   // Spine / Torso center
+            (5, 7), (7, 9), (6, 8), (8, 10),        // Arms
+            (5, 11), (6, 12), (11, 19), (12, 19),   // Torso box
+            (11, 13), (13, 15), (12, 14), (14, 16), // Legs
+            (15, 24), (24, 20), (20, 22),           // Left foot
+            (16, 25), (25, 21), (21, 23)            // Right foot
+        },
+        BonePatterns = new Dictionary<int, string[]>
+        {
+            // Standard COCO parts
+            {0, new[]{"Nose", "HeadTop_End"}}, {1, new[]{"lefteye"}}, {2, new[]{"righteye"}}, {3, new[]{"leftear"}}, {4, new[]{"rightear"}},
+            {5, new[]{"leftshoulder", "Shoulder_L"}}, {6, new[]{"rightshoulder", "Shoulder_R"}},
+            {7, new[]{"leftarm", "leftforearm", "Elbow_L"}}, {8, new[]{"rightarm", "rightforearm", "Elbow_R"}},
+            {9, new[]{"lefthand", "Hand_L"}}, {10, new[]{"righthand", "Hand_R"}},
+            {11, new[]{"leftupleg", "Thigh_L"}}, {12, new[]{"rightupleg", "Thigh_R"}},
+            {13, new[]{"leftleg", "Shin_L"}}, {14, new[]{"rightleg", "Shin_R"}},
+            {15, new[]{"leftfoot", "Foot_L"}}, {16, new[]{"rightfoot", "Foot_R"}},
+            // Expanded 26 parts
+            {17, new[]{"head"}}, {18, new[]{"neck"}}, {19, new[]{"hips", "pelvis"}},
+            {20, new[]{"lefttoebase", "Toe_L"}}, {21, new[]{"righttoebase", "Toe_R"}},
+            {22, new[]{"lefttoe_end"}}, {23, new[]{"righttoe_end"}},
+            {24, new[]{"leftheel"}}, {25, new[]{"rightheel"}}
         }
     };
 
     public static PoseStandard GetStandard(PoseStandardType type) => type switch
     {
         PoseStandardType.Fisheye => Fisheye,
+        PoseStandardType.Halpe26 => Halpe26,
         _ => COCO
     };
 

@@ -31,6 +31,8 @@ public class KeypointComponent
     /// </summary>
     public System.Numerics.Vector3 BoneOffset = System.Numerics.Vector3.Zero;
 
+    public KeypointComponent() { }
+
     public KeypointComponent(int index, string name)
     {
         KeypointIndex = index;

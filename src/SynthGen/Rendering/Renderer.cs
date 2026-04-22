@@ -72,6 +72,7 @@ public class Renderer : IDisposable
     public float HdriStrength { get; set; } = 1.0f;
     public IEnumerable<SceneObject> SelectedObjects { get; set; } = Array.Empty<SceneObject>();
     public bool ShowSceneUI { get; set; } = true;
+    public bool IsDatasetGenerationMode { get; set; } = false;
 
     public Renderer(GL gl, int width, int height)
     {
@@ -213,13 +214,16 @@ public class Renderer : IDisposable
         if (ShowSceneUI && SelectedObjects.Any())
             DrawSelectionHighlight(SelectedObjects, view, proj);
 
-        // ── Segmentation Pass ─────────────────────────────────────────────
-        _segFbo.Bind();
-        _gl.ClearColor(0, 0, 0, 1);
-        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-        _gl.Enable(EnableCap.DepthTest);
-        DrawObjectsSeg(scene, view, proj);
-        _segFbo.Unbind();
+        // ── Segmentation Pass (Only during generation, interactive picking is on-demand) ──
+        if (IsDatasetGenerationMode)
+        {
+            _segFbo.Bind();
+            _gl.ClearColor(0, 0, 0, 1);
+            _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+            _gl.Enable(EnableCap.DepthTest);
+            DrawObjectsSeg(scene, view, proj);
+            _segFbo.Unbind();
+        }
 
         // ── Depth Pass ────────────────────────────────────────────────────
         _depthFbo.Bind();
@@ -239,17 +243,36 @@ public class Renderer : IDisposable
         ApplyPostProcessing(cam, ocean, time);
     }
 
-    public unsafe Vector3 PickSegmentationColor(int x, int y)
+    public unsafe Vector3 PickSegmentationColor(SceneGraph scene, Camera cam, int x, int y)
     {
+        var view = cam.GetViewMatrix();
+        float aspect = (float)Width / Math.Max(1, Height);
+        var proj = cam.GetProjectionMatrix(aspect);
+
         _segFbo.Bind();
+        
+        int px = Math.Clamp(x, 0, Width - 1);
+        int py = Math.Clamp(Height - 1 - y, 0, Height - 1);
+
+        // Optimization: Use scissor test to only render the 1x1 area we actually need
+        _gl.Enable(EnableCap.ScissorTest);
+        _gl.Scissor(px, py, 1, 1);
+
+        _gl.ClearColor(0, 0, 0, 1);
+        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        _gl.Enable(EnableCap.DepthTest);
+        
+        DrawObjectsSeg(scene, view, proj);
+
+        _gl.Disable(EnableCap.ScissorTest);
+
         byte[] pixels = new byte[4];
         fixed (byte* ptr = pixels)
         {
-            int px = Math.Clamp(x, 0, Width - 1);
-            int py = Math.Clamp(Height - 1 - y, 0, Height - 1);
             _gl.ReadPixels(px, py, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, ptr);
         }
         _segFbo.Unbind();
+        
         return new Vector3(pixels[0] / 255f, pixels[1] / 255f, pixels[2] / 255f);
     }
 
@@ -379,13 +402,19 @@ public class Renderer : IDisposable
                 curr = curr.Parent;
             }
 
-            if (label == null) continue;
-
-            // Use body part group color if assigned, otherwise fallback to label color
-            Vector3 segColor = label.SegmentationColor;
-            var groupColor = SynthGen.Scene.Components.BodyPartGroups.GetColor(groupName);
-            if (groupColor.HasValue)
-                segColor = groupColor.Value;
+            Vector3 segColor;
+            if (IsDatasetGenerationMode)
+            {
+                if (label == null) continue;
+                segColor = label.SegmentationColor;
+                var groupColor = SynthGen.Scene.Components.BodyPartGroups.GetColor(groupName);
+                if (groupColor.HasValue)
+                    segColor = groupColor.Value;
+            }
+            else
+            {
+                segColor = obj.PickingColor;
+            }
 
             _segShader.SetMat4("uModel", obj.GetWorldMatrix());
             _segShader.SetVec3("uSegColor", segColor);
@@ -672,6 +701,10 @@ public class Renderer : IDisposable
         if (cam.FisheyeStrength > 0.01f)
             currentTex = ApplyPostEffect(_fisheyeShader, currentTex, ref useA, s => {
                 s.SetFloat("uStrength", cam.FisheyeStrength);
+                s.SetFloat("uAspect", (float)Width / Math.Max(1, Height));
+                
+                float rawFOV = cam.FieldOfView + (cam.FisheyeStrength * 100f);
+                s.SetFloat("uFOV", Math.Clamp(rawFOV, 1f, 175f));
             });
 
         if (cam.BlurRadius > 0.1f)

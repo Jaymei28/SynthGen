@@ -118,10 +118,13 @@ public class TrainingManager
         
         new Thread(() => {
             try {
-                // Install/Update ultralytics and common deps
+                // Install/Update PyTorch with CUDA support FIRST, then ultralytics
+                string pipCmd = "/c python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 && " +
+                                "python -m pip install --upgrade ultralytics";
+
                 var psi = new ProcessStartInfo {
                     FileName = "cmd.exe",
-                    Arguments = "/c python -m pip install --upgrade ultralytics torch torchvision torchaudio",
+                    Arguments = pipCmd,
                     UseShellExecute = true, // Show window so user sees progress
                     CreateNoWindow = false
                 };
@@ -188,7 +191,6 @@ public class TrainingManager
 
             OnLog?.Invoke($"[Training] 🚀 Launching: {args}");
 
-            // 3. Launch the process
             var psi = new ProcessStartInfo
             {
                 FileName = "cmd.exe",
@@ -199,6 +201,9 @@ public class TrainingManager
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            
+            // Fix OpenMP collision Error #15 which crashes YOLO instantly on Windows
+            psi.Environment["KMP_DUPLICATE_LIB_OK"] = "TRUE";
 
             _trainProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
 

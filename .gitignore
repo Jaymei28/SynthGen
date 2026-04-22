@@ -22,6 +22,7 @@ shader_error.log
 *.jpg
 *.jpeg
 *.txt
+publish/
 
 # Allow assets
 !/src/SynthGen/Assets/**
@@ -35,3 +36,5 @@ shader_error.log
 !/src/SynthGen/Physics/**
 !/src/SynthGen/Annotation/**
 !/src/SynthGen/SynthGen.csproj
+
+publish/

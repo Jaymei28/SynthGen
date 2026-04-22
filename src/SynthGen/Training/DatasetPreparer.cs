@@ -80,15 +80,13 @@ public static class DatasetPreparer
 
             // Copy image
             string destImg = Path.Combine(destImgDir, Path.GetFileName(imgFile));
-            if (!File.Exists(destImg))
-                File.Copy(imgFile, destImg, true);
+            File.Copy(imgFile, destImg, true);
 
             // Copy label if exists
             if (File.Exists(lblFile))
             {
                 string destLbl = Path.Combine(destLblDir, $"{baseName}.txt");
-                if (!File.Exists(destLbl))
-                    File.Copy(lblFile, destLbl, true);
+                File.Copy(lblFile, destLbl, true);
             }
 
             if (isTrain) trainCopied++; else valCopied++;
@@ -104,9 +102,23 @@ public static class DatasetPreparer
             writer.WriteLine($"train: train/images");
             writer.WriteLine($"val: val/images");
             writer.WriteLine();
-            writer.WriteLine($"nc: {classNames.Count}");
+            int maxId = 0;
+            if (classNames.Count > 0)
+                maxId = classNames.Keys.Max();
+            
+            writer.WriteLine($"nc: {maxId + 1}");
+            
+            var paddedNames = new List<string>();
+            for (int i = 0; i <= maxId; i++)
+            {
+                if (classNames.TryGetValue(i, out string? name))
+                    paddedNames.Add($"'{name}'");
+                else
+                    paddedNames.Add($"'unknown_{i}'");
+            }
+            
             writer.Write("names: [");
-            writer.Write(string.Join(", ", classNames.OrderBy(kv => kv.Key).Select(kv => $"'{kv.Value}'")));
+            writer.Write(string.Join(", ", paddedNames));
             writer.WriteLine("]");
 
             // YOLOv8-Pose requires kpt_shape: [num_keypoints, dim]

@@ -1,9 +1,13 @@
+using Silk.NET.Core;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.OpenGL.Extensions.ImGui;
 using Silk.NET.Windowing;
 using System.Numerics;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using SynthGen.Scene.Components;
 
 namespace SynthGen.App;
@@ -69,6 +73,9 @@ public class Application
 
     private void OnLoad()
     {
+        // Set window icon
+        SetWindowIcon();
+
         _gl = _window.CreateOpenGL();
         _input = _window.CreateInput();
         _imguiController = new ImGuiController(_gl, _window, _input);
@@ -219,6 +226,45 @@ public class Application
     private void OnResize(Vector2D<int> size)
     {
         _gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+    }
+
+    private void SetWindowIcon()
+    {
+        try
+        {
+            // Look for icon next to the executable
+            var exeDir = AppContext.BaseDirectory;
+            var iconPath = Path.Combine(exeDir, "SyntGen.png");
+            
+            // Fallback: look in working directory or project root
+            if (!File.Exists(iconPath))
+                iconPath = Path.Combine(Directory.GetCurrentDirectory(), "SyntGen.png");
+            if (!File.Exists(iconPath))
+                iconPath = Path.Combine(exeDir, "..", "..", "..", "..", "..", "SyntGen.png");
+            
+            if (File.Exists(iconPath))
+            {
+                using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(iconPath);
+                
+                // Resize to 32x32 for window icon
+                image.Mutate(x => x.Resize(32, 32));
+                
+                var pixels = new byte[32 * 32 * 4];
+                image.CopyPixelDataTo(pixels);
+                
+                var rawImage = new RawImage(32, 32, pixels);
+                _window.SetWindowIcon(ref rawImage);
+                Console.WriteLine($"[SynthGen] Window icon set from: {iconPath}");
+            }
+            else
+            {
+                Console.WriteLine("[SynthGen] SyntGen.png not found, using default icon.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SynthGen] Failed to set window icon: {ex.Message}");
+        }
     }
 
     private void OnClosing()

@@ -8,6 +8,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>SynthGen</RootNamespace>
+    <ApplicationIcon>SynthGen.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +23,10 @@
     <PackageReference Include="SixLabors.ImageSharp" Version="2.1.9" />
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
     <PackageReference Include="TinyExr.Net" Version="0.3.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\SyntGen.png" CopyToOutputDirectory="PreserveNewest" Link="SyntGen.png" />
   </ItemGroup>
 
 </Project>

@@ -86,7 +86,7 @@ public static class KeypointAnnotator
                         continue;
                     }
 
-                    var worldPos = kpNode.Transform.Position;
+                    var worldPos = kpNode.GetWorldMatrix().Translation;
                     var clip = Vector4.Transform(new Vector4(worldPos, 1.0f), vp);
                     if (clip.W <= 0)
                     {
@@ -187,7 +187,8 @@ public static class KeypointAnnotator
                     continue;
                 }
 
-                var jointModel = finalBoneMatrices[boneIdx] * objectWorldMatrix;
+                // Chain: Bone -> Armature Root -> Model Space -> World Space
+                var jointModel = skeleton.Bones[boneIdx].GlobalTransform * skeleton.GlobalInverseTransform * objectWorldMatrix;
                 var jointWorldPos = jointModel.Translation;
 
                 var clip2 = Vector4.Transform(new Vector4(jointWorldPos, 1.0f), vp);
@@ -277,6 +278,48 @@ public static class KeypointAnnotator
 
         Vector2 warpedDist = Vector2.Normalize(dist) * v;
         return center + new Vector2(warpedDist.X * width, warpedDist.Y * height);
+    }
+
+    /// <summary>
+    /// Inverse of the fisheye shader: maps a click position on the distorted viewport
+    /// back to the corresponding position in the undistorted segmentation/picking buffer.
+    /// The shader maps: sampleUV = tan(r * halfFOV) / tan(halfFOV)
+    /// So inverse is: r_undistorted = atan(r_distorted * tan(halfFOV)) / halfFOV
+    /// </summary>
+    public static Vector2 UnwarpFisheye(Vector2 screenPos, int width, int height, float strength, float fovDegrees)
+    {
+        if (MathF.Abs(strength) < 0.001f) return screenPos;
+
+        float aspect = (float)width / MathF.Max(1, height);
+        Vector2 center = new Vector2(width * 0.5f, height * 0.5f);
+
+        // Normalize to [-0.5, 0.5] (matching shader's vUV - 0.5)
+        Vector2 p = (screenPos - center);
+        p.X /= width;
+        p.Y /= height;
+        p.X *= aspect; // Aspect correction (matching shader)
+
+        float d = p.Length();
+        if (d < 0.001f) return screenPos;
+        if (d > 0.5f) return screenPos; // Outside circular mask
+
+        // r is normalized distance [0..1] within the 0.5 radius circle
+        float r = d / 0.5f;
+
+        float rawFOV = fovDegrees + (strength * 100f);
+        rawFOV = MathF.Min(MathF.Max(rawFOV, 1f), 175f);
+        float halfFOV = (rawFOV * 0.5f) * (MathF.PI / 180f);
+
+        // Shader does: theta = r * halfFOV, sampleD = tan(theta) / tan(halfFOV)
+        // So: sampleD is the UV in the rectilinear render
+        float theta = r * halfFOV;
+        float sampleD = MathF.Tan(theta) / MathF.Tan(halfFOV);
+
+        // Map back to pixel space
+        Vector2 sampleDir = (p / d) * (sampleD * 0.5f);
+        sampleDir.X /= aspect;
+
+        return center + new Vector2(sampleDir.X * width, sampleDir.Y * height);
     }
 
     private static Dictionary<int, SceneObject> CollectKeypointNodes(SceneObject obj)

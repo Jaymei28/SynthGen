@@ -1,4 +1,7 @@
 using System.Numerics;
+using System.Collections.Generic;
+using System.Linq;
+using SynthGen.Scene.Components;
 
 namespace SynthGen.Scene;
 
@@ -32,9 +35,20 @@ public class SceneObject
     // Component storage
     private readonly Dictionary<Type, object> _components = new();
 
-    public SceneObject(string name = "Object")
+    public Vector3 PickingColor { get; }
+
+    public SceneObject(string name = "NewObject")
     {
         Name = name;
+        Transform = new Transform();
+
+        // Generate a unique picking color based on a GUID so duplicates have unique IDs
+        var id = Guid.NewGuid().GetHashCode();
+        PickingColor = new Vector3(
+            ((id >> 16) & 0xFF) / 255f,
+            ((id >> 8) & 0xFF) / 255f,
+            (id & 0xFF) / 255f
+        );
     }
 
     public void AddComponent<T>(T component) where T : class
@@ -81,13 +95,33 @@ public class SceneObject
             var comp = entry.Value;
 
             // Manual deep-copy logic for specific components that need it
-            if (comp is SynthGen.Scene.Components.LabelComponent lc)
+            if (comp is LabelComponent lc)
             {
-                clone.AddComponent(new SynthGen.Scene.Components.LabelComponent
+                clone.AddComponent(new LabelComponent
                 {
                     ClassID = lc.ClassID,
                     ClassName = lc.ClassName,
                     SegmentationColor = lc.SegmentationColor
+                });
+            }
+            else if (comp is MeshRendererComponent mr)
+            {
+                clone.AddComponent(new MeshRendererComponent(mr.Mesh!)
+                {
+                    Material = new Rendering.Material {
+                        BaseColor = mr.Material.BaseColor,
+                        AlbedoTexturePath = mr.Material.AlbedoTexturePath,
+                        AlbedoTextureID = mr.Material.AlbedoTextureID,
+                        NormalTexturePath = mr.Material.NormalTexturePath,
+                        NormalTextureID = mr.Material.NormalTextureID,
+                        Smoothness = mr.Material.Smoothness,
+                        Metallic = mr.Material.Metallic,
+                        NormalScale = mr.Material.NormalScale,
+                        ColorIntensity = mr.Material.ColorIntensity,
+                        EmissiveColor = mr.Material.EmissiveColor,
+                        EmissiveIntensity = mr.Material.EmissiveIntensity
+                    },
+                    Visible = mr.Visible
                 });
             }
             else

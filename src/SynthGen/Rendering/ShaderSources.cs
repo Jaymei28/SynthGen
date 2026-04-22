@@ -7,7 +7,7 @@ public static class ShaderSources
 {
     // === PBR Vertex Shader ===================================================
     public const string PBR_VERT = @"
-#version 450 core
+#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
@@ -49,7 +49,8 @@ void main() {
 
     // === PBR Fragment Shader =================================================
     public const string PBR_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vUV;
@@ -133,7 +134,7 @@ void main() {
 
     // === Segmentation Shaders ================================================
     public const string SEG_VERT = @"
-#version 450 core
+#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 4) in ivec4 aBoneIDs;
 layout(location = 5) in vec4 aWeights;
@@ -157,7 +158,8 @@ void main() {
 ";
 
     public const string SEG_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 uniform vec3 uSegColor;
 out vec4 FragColor;
 
@@ -168,7 +170,7 @@ void main() {
 
     // === Depth Shaders =======================================================
     public const string DEPTH_VERT = @"
-#version 450 core
+#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 4) in ivec4 aBoneIDs;
 layout(location = 5) in vec4 aWeights;
@@ -196,7 +198,8 @@ void main() {
 ";
 
     public const string DEPTH_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 in float vDepth;
 
 uniform float uNear;
@@ -213,7 +216,7 @@ void main() {
 
     // === Grid Shaders ========================================================
     public const string GRID_VERT = @"
-#version 450 core
+#version 330 core
 layout(location = 0) in vec3 aPos;
 
 uniform mat4 uView;
@@ -228,7 +231,8 @@ void main() {
 ";
 
     public const string GRID_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 in vec3 vWorldPos;
 out vec4 FragColor;
 
@@ -258,7 +262,7 @@ void main() {
     // Ported from GodotOceanWaves: Atlas GDC 2019 BSDF lighting model
     // with GGX microfacet distribution, Smith masking-shadowing, SSS, and foam.
     public const string OCEAN_VERT = @"
-#version 450 core
+#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 2) in vec2 aUV;
 
@@ -302,7 +306,7 @@ void main() {
 ";
 
     public const string OCEAN_DEPTH_VERT = @"
-#version 450 core
+#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 2) in vec2 aUV;
 
@@ -337,7 +341,8 @@ void main() {
 ";
 
     public const string OCEAN_DEPTH_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 in float vDepth;
 uniform float uNear;
 uniform float uFar;
@@ -349,7 +354,8 @@ void main() {
 ";
 
     public const string OCEAN_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 #define PI 3.141592653589793
 #define REFLECTANCE 0.02
 
@@ -516,9 +522,10 @@ void main() {
 
     // === Screen Quad (for post-processing) ===================================
     public const string SCREEN_VERT = @"
-#version 450 core
+#version 330 core
+precision highp float;
 layout(location = 0) in vec2 aPos;
-layout(location = 0) out vec2 vUV;
+out vec2 vUV;
 
 void main() {
     vUV = aPos * 0.5 + vec2(0.5);
@@ -528,8 +535,9 @@ void main() {
 
     // === Post-Process: Bloom =================================================
     public const string BLOOM_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform float uThreshold;
@@ -545,8 +553,9 @@ void main() {
 
     // === Post-Process: Fog ===================================================
     public const string FOG_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform sampler2D uDepth;
@@ -562,8 +571,9 @@ void main() {
 ";
 
     public const string WEATHER_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 
 uniform sampler2D uScene;
@@ -735,35 +745,72 @@ void main() {
 
     // === Post-Process: Fisheye ===============================================
     public const string FISHEYE_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform float uStrength;
+uniform float uAspect;
+uniform float uFOV; // Raw field of view in degrees
 
 void main() {
-    vec2 center = vec2(0.5);
-    vec2 dist = vUV - center;
-    float d = length(dist);
+    if (uStrength <= 0.01) {
+        FragOut = texture(uScene, vUV);
+        return;
+    }
+
+    // 1. Center and aspect correction
+    vec2 p = (vUV - 0.5);
+    p.x *= uAspect;
+    float d = length(p);
     
-    // Apply barrel distortion
-    vec2 uv = center + dist * (1.0 + d * d * uStrength);
+    // 2. Circular Mask (0.5 radius)
+    if (d > 0.5) {
+        FragOut = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+
+    // 3. Coordinate conversion
+    // r is normalized distance from center [0..1]
+    float r = d / 0.5;
     
-    // Scale down by the maximum possible distortion (which occurs at the corners where d^2 = 0.5)
-    // This ensures no sampled UV ever goes outside [0, 1], completely eliminating the black frame.
-    float cornerDistortion = 1.0 + 0.5 * uStrength;
-    uv = center + (uv - center) / cornerDistortion;
+    // Half-FOV of the rendered frame in radians
+    float halfFOV = (uFOV * 0.5) * (3.14159 / 180.0);
     
-    // Clamp to edge to be absolutely safe
-    uv = clamp(uv, 0.0, 1.0);
-    FragOut = texture(uScene, uv);
+    // theta is the angle from the camera center for our ray
+    // We mix between linear (r) and a more spherical curve based on strength
+    float theta = r * halfFOV;
+    
+    // 4. Perspective Sampling
+    // In a flat perspective render, distance from center is tan(theta) / tan(halfFOV)
+    float sampleD = tan(theta) / tan(halfFOV);
+    
+    // Scale by 0.5 to map back to [0..0.5] UV space
+    vec2 sampleDir = (p / (d + 1e-7)) * (sampleD * 0.5);
+    sampleDir.x /= uAspect;
+    
+    vec2 finalUV = sampleDir + 0.5;
+    
+    // Clamp sample to avoid bleeding edges
+    if (finalUV.x < 0.0 || finalUV.x > 1.0 || finalUV.y < 0.0 || finalUV.y > 1.0) {
+       FragOut = vec4(0.0, 0.0, 0.0, 1.0);
+       return;
+    }
+
+    vec3 col = texture(uScene, finalUV).rgb;
+    
+    // Optional: Vignette for security-cam look
+    float vignette = smoothstep(0.5, 0.495, d);
+    FragOut = vec4(col * vignette, 1.0);
 }
 ";
 
     // === Post-Process: Blur ==================================================
     public const string BLUR_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform float uRadius;
@@ -782,8 +829,9 @@ void main() {
 
     // === Post-Process: Noise =================================================
     public const string NOISE_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform float uIntensity;
@@ -804,8 +852,9 @@ void main() {
 
     // === Post-Process: Exposure / Tone Mapping ===============================
     public const string EXPOSURE_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform float uExposure;
@@ -818,8 +867,9 @@ void main() {
 
     // === Post-Process: White Balance =========================================
     public const string WHITEBALANCE_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform float uTemperature;
@@ -836,8 +886,9 @@ void main() {
 
     // === SSAO Shaders ========================================================
     public const string SSAO_FRAG = @"
-#version 450 core
-layout(location = 0) in vec2 vUV;
+#version 330 core
+precision highp float;
+in vec2 vUV;
 layout(location = 0) out vec4 FragOut;
 uniform sampler2D uScene;
 uniform sampler2D uDepth;
@@ -860,7 +911,7 @@ void main() {
 
     // === Skybox Shaders ======================================================
     public const string SKYBOX_VERT = @"
-#version 450 core
+#version 330 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 uView;
 uniform mat4 uProjection;
@@ -874,7 +925,8 @@ void main() {
 ";
 
     public const string SKYBOX_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 in vec3 vWorldPos;
 uniform sampler2D uHdri;
 uniform float uStrength;
@@ -895,7 +947,7 @@ void main() {
 
     // === Selection Outline: Mask Vertex Shader ================================
     public const string OUTLINE_MASK_VERT = @"
-#version 450 core
+#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 4) in ivec4 aBoneIDs;
 layout(location = 5) in vec4 aWeights;
@@ -920,7 +972,8 @@ void main() {
 
     // === Selection Outline: Mask Fragment Shader ==============================
     public const string OUTLINE_MASK_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 out vec4 FragOut;
 void main() {
     FragOut = vec4(1.0, 1.0, 1.0, 1.0);
@@ -929,7 +982,8 @@ void main() {
 
     // === Selection Outline: Edge Detection Composite =========================
     public const string OUTLINE_COMPOSITE_FRAG = @"
-#version 450 core
+#version 330 core
+precision highp float;
 in vec2 vUV;
 uniform sampler2D uScene;
 uniform sampler2D uMask;
