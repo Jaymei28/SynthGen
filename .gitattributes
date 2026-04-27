@@ -2,6 +2,7 @@
 *.hdr filter=lfs diff=lfs merge=lfs -text
 **/*.fbx filter=lfs diff=lfs merge=lfs -text
 **/*.hdr filter=lfs diff=lfs merge=lfs -text
+src/SynthGen/Assets/models/Team2_Herry_MotorBike.fbx filter=lfs diff=lfs merge=lfs -text
 *.exr filter=lfs diff=lfs merge=lfs -text
 *.mp4 filter=lfs diff=lfs merge=lfs -text
 *.dll filter=lfs diff=lfs merge=lfs -text
