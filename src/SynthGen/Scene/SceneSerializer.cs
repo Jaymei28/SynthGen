@@ -325,6 +325,8 @@ public class SceneSerializer
                     }
                 }
             }
+            ui.RefreshHDRIs();
+            ui.RefreshTexturePools();
 
             log?.Invoke($"[Scenario] Loaded: {Path.GetFileName(path)}");
         }

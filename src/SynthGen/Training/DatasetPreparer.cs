@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using SynthGen.Annotation;
 
 namespace SynthGen.Training;
 
@@ -126,6 +127,28 @@ public static class DatasetPreparer
             {
                 int kptCount = DiscoverKeypointCount(outputDir);
                 writer.WriteLine($"kpt_shape: [{kptCount}, 3]");
+
+                // Attempt to match a registered standard to provide flip_idx and kpt_names
+                var standards = new[] { KeypointRegistry.COCO, KeypointRegistry.Fisheye, KeypointRegistry.Halpe26 };
+                var match = standards.FirstOrDefault(s => s.Keypoints.Count == kptCount);
+                if (match != null)
+                {
+                    if (match.FlipIndices.Length > 0)
+                        writer.WriteLine($"flip_idx: [{string.Join(", ", match.FlipIndices)}]");
+                    
+                    writer.WriteLine();
+                    writer.WriteLine("kpt_names:");
+                    writer.WriteLine("  0:"); // Writing for the first class (person)
+                    foreach (var kvp in match.Keypoints.OrderBy(k => k.Key))
+                    {
+                        // Convert "Left Eye" to "left_eye"
+                        string formattedName = kvp.Value.ToLower().Replace(" ", "_");
+                        writer.WriteLine($"    - {formattedName}");
+                    }
+
+                    log?.Invoke($"[DataPrep] Pose task: Matched {match.Name} standard. Added flip_idx and kpt_names to data.yaml");
+                }
+
                 log?.Invoke($"[DataPrep] Pose task detected. Added kpt_shape: [{kptCount}, 3] to data.yaml");
             }
         }

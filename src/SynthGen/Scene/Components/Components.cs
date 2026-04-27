@@ -22,7 +22,7 @@ public class LightComponent
 public class LabelComponent
 {
     public int ClassID;
-    public string ClassName = "object";
+    public string ClassName = "person";
     public Vector3 SegmentationColor = new(1, 0, 0); // unique flat color
     public int InstanceID;  // auto-assigned
 

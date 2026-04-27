@@ -14,6 +14,7 @@ public class PoseStandard
     public string Name = "";
     public Dictionary<int, string> Keypoints = new();
     public (int, int)[] Edges = System.Array.Empty<(int, int)>();
+    public int[] FlipIndices = System.Array.Empty<int>();
     public Dictionary<int, string[]> BonePatterns = new();
 }
 
@@ -33,6 +34,7 @@ public static class KeypointRegistry
             (0, 1), (0, 2), (1, 3), (2, 4), (5, 6), (5, 7), (7, 9), (6, 8), (8, 10), 
             (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)
         },
+        FlipIndices = new[] { 0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15 },
         BonePatterns = new Dictionary<int, string[]>
         {
             {0, new[]{"head"}}, {1, new[]{"lefteye"}}, {2, new[]{"righteye"}}, {3, new[]{"leftear"}}, {4, new[]{"rightear"}},
@@ -65,6 +67,7 @@ public static class KeypointRegistry
             (2, 4), (4, 6), // Left arm
             (3, 5), (5, 7)  // Right arm
         },
+        FlipIndices = new[] { 0, 1, 3, 2, 5, 4, 7, 6 },
         BonePatterns = new Dictionary<int, string[]>
         {
             {0, new[]{"head"}},
@@ -98,6 +101,10 @@ public static class KeypointRegistry
             (11, 13), (13, 15), (12, 14), (14, 16), // Legs
             (15, 24), (24, 20), (20, 22),           // Left foot
             (16, 25), (25, 21), (21, 23)            // Right foot
+        },
+        FlipIndices = new[] { 
+            0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15, 
+            17, 18, 19, 21, 20, 23, 22, 25, 24 
         },
         BonePatterns = new Dictionary<int, string[]>
         {

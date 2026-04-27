@@ -36,6 +36,9 @@ public class Application
     private float _deltaTime;
     private float _totalTime;
     private DateTime _lastFrame;
+    private float _autosaveTimer = 0f;
+    private const float AutosaveInterval = 60f; // Save every 60 seconds
+    private string _autosavePath = "";
 
     public GL GL => _gl;
     public Scene.SceneGraph Scene => _scene;
@@ -101,6 +104,9 @@ public class Application
         // Set up default scene
         SetupDefaultScene();
 
+        _autosavePath = Path.Combine(AppContext.BaseDirectory, "autosave.json");
+        CheckForRecovery();
+
         _lastFrame = DateTime.UtcNow;
 
         Console.WriteLine("[SynthGen] Application initialized.");
@@ -154,6 +160,17 @@ public class Application
         _deltaTime = (float)(now - _lastFrame).TotalSeconds;
         _totalTime += _deltaTime;
         _lastFrame = now;
+
+        // Auto-save logic
+        if (!_captureManager.IsGenerating)
+        {
+            _autosaveTimer += _deltaTime;
+            if (_autosaveTimer >= AutosaveInterval)
+            {
+                _autosaveTimer = 0f;
+                PerformAutosave();
+            }
+        }
 
         _inputManager.Update();
 
@@ -274,6 +291,33 @@ public class Application
         _input?.Dispose();
         _gl?.Dispose();
         Console.WriteLine("[SynthGen] Shutdown complete.");
+    }
+
+    private void CheckForRecovery()
+    {
+        if (File.Exists(_autosavePath))
+        {
+            _uiManager.ShowRecoveryPrompt(_autosavePath);
+        }
+    }
+
+    public void PerformAutosave()
+    {
+        try
+        {
+            SynthGen.Scene.SceneSerializer.Save(this, _uiManager, _autosavePath);
+            _uiManager.AddLog("[System] Periodic autosave complete.");
+        }
+        catch (Exception ex)
+        {
+            _uiManager.AddLog($"[Error] Autosave failed: {ex.Message}");
+        }
+    }
+
+    public void ClearAutosave()
+    {
+        if (File.Exists(_autosavePath))
+            File.Delete(_autosavePath);
     }
 
     /// <summary>

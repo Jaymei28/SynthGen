@@ -38,3 +38,8 @@ publish/
 !/src/SynthGen/SynthGen.csproj
 
 publish/
+*.zip
+build.log
+imgui.ini
+crash_log.txt
+autosave.json

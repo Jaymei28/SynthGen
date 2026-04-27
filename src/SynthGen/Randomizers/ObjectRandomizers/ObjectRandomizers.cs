@@ -170,6 +170,7 @@ public class TextureRandomizer : RandomizerBase
 
     // Will be populated from AssetManager
     public List<string> TexturePaths { get; set; } = new();
+    [JsonIgnore]
     public Func<string, uint>? LoadTextureFunc { get; set; }
 
     public override void Randomize(SceneGraph scene, Random rng)
@@ -253,8 +254,8 @@ public class MaterialRandomizer : RandomizerBase
 {
     public override string Name => "Material";
     public override string Category => "Object";
-
     public List<string> PoolTexturePaths { get; set; } = new();
+    [JsonIgnore]
     public Func<string, uint>? LoadTextureFunc { get; set; }
 
     public override void Randomize(SceneGraph scene, Random rng)

@@ -348,7 +348,7 @@ public class CaptureManager
         var annotations = Annotation.KeypointAnnotator.GenerateKeypoints(
             _scene, view, proj, _renderer.Width, _renderer.Height, 
             (KeypointBoneMap.Count > 0 ? KeypointBoneMap : null),
-            cam.FisheyeStrength);
+            cam.FisheyeStrength, cam.FieldOfView);
 
         if (annotations.Count > 0)
         {

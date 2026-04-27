@@ -82,6 +82,10 @@ public class UIManager
     private int _generatedImageCount = 0;
     private bool _suppressObjectDelete;
 
+    // Recovery state
+    private bool _showRecoveryPopup = false;
+    private string _recoveryPath = "";
+
     public UIManager(SynthGen.App.Application app)
     {
         _app = app;
@@ -143,9 +147,53 @@ public class UIManager
         RenderCapturePanel();
         if (_showTrainingPanel) RenderTrainingPanel();
         RenderTrainingPrompt();
+        RenderRecoveryPrompt();
         RenderConsole();
 
         HandleGlobalShortcuts();
+    }
+
+    public void ShowRecoveryPrompt(string path)
+    {
+        _recoveryPath = path;
+        _showRecoveryPopup = true;
+    }
+
+    private void RenderRecoveryPrompt()
+    {
+        if (_showRecoveryPopup)
+        {
+            if (!ImGui.IsPopupOpen("Recover Work?"))
+                ImGui.OpenPopup("Recover Work?");
+
+            var viewport = ImGui.GetMainViewport();
+            ImGui.SetNextWindowPos(viewport.WorkPos + viewport.WorkSize * 0.5f, ImGuiCond.Always, new Vector2(0.5f, 0.5f));
+            
+            if (ImGui.BeginPopupModal("Recover Work?", ref _showRecoveryPopup, ImGuiWindowFlags.AlwaysAutoResize))
+            {
+                ImGui.TextColored(new Vector4(1, 0.8f, 0.3f, 1), "⚠ It looks like the application didn't close properly.");
+                ImGui.Text("Would you like to recover your unsaved scene from the last autosave?");
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+
+                if (ImGui.Button("✅ Restore Work", new Vector2(150, 35)))
+                {
+                    SceneSerializer.Load(_app.Scene, _recoveryPath, _app, this, AddLog);
+                    _showRecoveryPopup = false;
+                    _app.ClearAutosave(); 
+                    ImGui.CloseCurrentPopup();
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("❌ Start Fresh", new Vector2(150, 35)))
+                {
+                    _app.ClearAutosave();
+                    _showRecoveryPopup = false;
+                    ImGui.CloseCurrentPopup();
+                }
+                ImGui.EndPopup();
+            }
+        }
     }
 
     private void HandleGlobalShortcuts()
@@ -327,7 +375,11 @@ public class UIManager
                 if (ImGui.MenuItem("Save Scenario As..."))
                 {
                     string? path = SaveFileWithDialog("SynthGen Scenarios (*.json)|*.json|All files (*.*)|*.*", "json");
-                    if (path != null) SceneSerializer.Save(_app, this, path);
+                    if (path != null)
+                    {
+                        SceneSerializer.Save(_app, this, path);
+                        _app.ClearAutosave(); // Manual save succeeds, clear autosave
+                    }
                 }
                 ImGui.Separator();
                 if (ImGui.MenuItem("Exit")) Environment.Exit(0);
@@ -880,7 +932,8 @@ public class UIManager
             Vector3 camRight = Vector3.Normalize(Vector3.Cross(camFront, Vector3.UnitY));
             Vector3 camUp = Vector3.Normalize(Vector3.Cross(camRight, camFront));
 
-            float dist = Vector3.Distance(cam.Transform.Position, sel.Transform.Position);
+            float dist = 10.0f;
+            if (cam != null) dist = Vector3.Distance(cam.Transform.Position, sel.Transform.Position);
             float moveSense = dist * 0.003f;
 
             // Using cached top-most selection to avoid double-moving children
@@ -1480,7 +1533,7 @@ public class UIManager
         // Apply Fisheye Warp for UI overlay
         if (MathF.Abs(cam.FisheyeStrength) > 0.001f)
         {
-            var warped = Annotation.KeypointAnnotator.WarpFisheye(new Vector2(sx, sy), (int)_viewportSize.X, (int)_viewportSize.Y, cam.FisheyeStrength);
+            var warped = Annotation.KeypointAnnotator.WarpFisheye(new Vector2(sx, sy), (int)_viewportSize.X, (int)_viewportSize.Y, cam.FisheyeStrength, cam.FieldOfView);
             sx = warped.X;
             sy = warped.Y;
         }
@@ -1927,7 +1980,7 @@ public class UIManager
         if (ImGui.Combo("Standard", ref currentStdIdx, standardNames, standardNames.Length))
         {
             kpRoot.PoseStandard = (Annotation.PoseStandardType)currentStdIdx;
-            AddLog($"[Pose] Switched '{kpRoot.Name}' to {kpRoot.PoseStandard} standard");
+            AddLog($"[Pose] Switched '{kpRoot.Name}' to {kpRoot.PoseStandard} standard (0: {Annotation.KeypointRegistry.GetStandard(kpRoot.PoseStandard).Keypoints[0]})");
         }
 
         var std = Annotation.KeypointRegistry.GetStandard(kpRoot.PoseStandard);
@@ -2760,7 +2813,7 @@ public class UIManager
         AddLog("[Scene] Added Light");
     }
 
-    private void AddLog(string msg)
+    public void AddLog(string msg)
     {
         _logs.Add($"[{DateTime.Now:HH:mm:ss}] {msg}");
     }
@@ -2798,7 +2851,7 @@ public class UIManager
         }
     }
 
-    private void RefreshTexturePools()
+    public void RefreshTexturePools()
     {
         var files = _app.AssetManager.GetAvailableTextures();
         
@@ -3378,7 +3431,7 @@ public class UIManager
             // Apply Fisheye Warp for UI overlay
             if (MathF.Abs(cam.FisheyeStrength) > 0.001f)
             {
-                var warped = Annotation.KeypointAnnotator.WarpFisheye(new Vector2(sx, sy), (int)_viewportSize.X, (int)_viewportSize.Y, cam.FisheyeStrength);
+                var warped = Annotation.KeypointAnnotator.WarpFisheye(new Vector2(sx, sy), (int)_viewportSize.X, (int)_viewportSize.Y, cam.FisheyeStrength, cam.FieldOfView);
                 sx = warped.X;
                 sy = warped.Y;
             }

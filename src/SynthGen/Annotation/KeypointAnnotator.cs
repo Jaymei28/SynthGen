@@ -50,7 +50,8 @@ public static class KeypointAnnotator
         int imageWidth,
         int imageHeight,
         Dictionary<int, string>? keypointBoneMap = null,
-        float fisheyeStrength = 0)
+        float fisheyeStrength = 0,
+        float fovDegrees = 60)
     {
         var results = new List<KeypointAnnotation>();
         var vp = viewMatrix * projMatrix;
@@ -72,6 +73,13 @@ public static class KeypointAnnotator
                     annotation.ClassID = label.ClassID;
                     annotation.InstanceID = label.InstanceID;
                     annotation.ClassName = label.ClassName;
+                }
+                else
+                {
+                    // Fallback for pose tasks: assume class 0 "person" if keypoints exist
+                    annotation.ClassID = 0;
+                    annotation.ClassName = "person";
+                    annotation.InstanceID = rootObj.GetHashCode();
                 }
 
                 int visibleCount = 0;
@@ -102,7 +110,7 @@ public static class KeypointAnnotator
                     // Apply Fisheye Warp if active
                     if (MathF.Abs(fisheyeStrength) > 0.001f)
                     {
-                        var warped = WarpFisheye(new Vector2(sx, sy), imageWidth, imageHeight, fisheyeStrength);
+                        var warped = WarpFisheye(new Vector2(sx, sy), imageWidth, imageHeight, fisheyeStrength, fovDegrees);
                         sx = warped.X;
                         sy = warped.Y;
                     }
@@ -166,6 +174,12 @@ public static class KeypointAnnotator
                 boneAnnotation.InstanceID = boneLabel.InstanceID;
                 boneAnnotation.ClassName = boneLabel.ClassName;
             }
+            else
+            {
+                boneAnnotation.ClassID = 0;
+                boneAnnotation.ClassName = "person";
+                boneAnnotation.InstanceID = rootObj.GetHashCode();
+            }
 
             int boneVisibleCount = 0;
             float bMinX = float.MaxValue, bMinY = float.MaxValue;
@@ -206,7 +220,7 @@ public static class KeypointAnnotator
                 // Apply Fisheye Warp if active
                 if (MathF.Abs(fisheyeStrength) > 0.001f)
                 {
-                    var warped = WarpFisheye(new Vector2(sx, sy), imageWidth, imageHeight, fisheyeStrength);
+                    var warped = WarpFisheye(new Vector2(sx, sy), imageWidth, imageHeight, fisheyeStrength, fovDegrees);
                     sx = warped.X;
                     sy = warped.Y;
                 }
@@ -248,36 +262,48 @@ public static class KeypointAnnotator
     }
 
     /// <summary>
-    /// Applies the INVERSE of the shader's lens distortion to keypoint coordinates.
+    /// Applies the lens distortion matching the shader to keypoint coordinates.
     /// This keeps annotation points pinned to the character's visuals during fish-eye.
     /// </summary>
-    public static Vector2 WarpFisheye(Vector2 screenPos, int width, int height, float strength)
+    public static Vector2 WarpFisheye(Vector2 screenPos, int width, int height, float strength, float fovDegrees)
     {
         if (MathF.Abs(strength) < 0.001f) return screenPos;
-        
-        // Normalize to [-0.5, 0.5] range relative to center (exactly matching shader vUV - 0.5)
+
+        float aspect = (float)width / MathF.Max(1, height);
         Vector2 center = new Vector2(width * 0.5f, height * 0.5f);
-        Vector2 dist = (screenPos - center);
-        dist.X /= width;
-        dist.Y /= height;
-        
-        float d = dist.Length();
-        if (d < 0.001f) return screenPos;
 
-        // Solution for v: strength*v^3 + v - (d * cornerDistortion) = 0
-        float cornerDistortion = 1.0f + 0.5f * strength;
-        float sTarget = d * cornerDistortion;
-        
-        float v = d; 
-        for (int i = 0; i < 5; i++)
-        {
-            float f = strength * v * v * v + v - sTarget;
-            float df = 3.0f * strength * v * v + 1.0f;
-            v -= f / df;
-        }
+        // Normalize to [-0.5, 0.5] (matching shader's vUV - 0.5)
+        Vector2 p = (screenPos - center);
+        p.X /= width;
+        p.Y /= height;
+        p.X *= aspect; // Aspect correction (matching shader)
 
-        Vector2 warpedDist = Vector2.Normalize(dist) * v;
-        return center + new Vector2(warpedDist.X * width, warpedDist.Y * height);
+        float d_undistorted = p.Length();
+        if (d_undistorted < 0.001f) return screenPos;
+
+        // The shader maps distorted distance 'r' to undistorted 'sampleD' via:
+        // sampleD = tan(r * halfFOV) / tan(halfFOV)
+        // We need the inverse: find 'r' given 'sampleD' (undistorted distance)
+        
+        float sampleD = d_undistorted / 0.5f;
+        
+        float rawFOV = fovDegrees + (strength * 100f);
+        rawFOV = MathF.Min(MathF.Max(rawFOV, 1f), 175f);
+        float halfFOV = (rawFOV * 0.5f) * (MathF.PI / 180f);
+
+        // Solving sampleD = tan(theta) / tan(halfFOV)
+        // theta = atan(sampleD * tan(halfFOV))
+        float theta = MathF.Atan(sampleD * MathF.Tan(halfFOV));
+        
+        // r = theta / halfFOV
+        float r = theta / halfFOV;
+        float d_distorted = r * 0.5f;
+
+        // Map back to pixel space
+        Vector2 warpedDir = (p / d_undistorted) * d_distorted;
+        warpedDir.X /= aspect;
+
+        return center + new Vector2(warpedDir.X * width, warpedDir.Y * height);
     }
 
     /// <summary>
