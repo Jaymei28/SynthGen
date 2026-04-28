@@ -82,6 +82,7 @@ public class SceneObject
     public SceneObject Clone()
     {
         var clone = new SceneObject($"{Name} (Copy)");
+        clone.AssetPath = AssetPath;
         clone.Transform.Position = Transform.Position;
         clone.Transform.Rotation = Transform.Rotation;
         clone.Transform.Scale = Transform.Scale;
