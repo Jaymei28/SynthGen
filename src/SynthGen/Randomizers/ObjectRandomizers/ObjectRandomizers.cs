@@ -2,6 +2,7 @@ using System.Numerics;
 using ImGuiNET;
 using SynthGen.Scene;
 using SynthGen.Scene.Components;
+using System.Text.Json.Serialization;
 
 namespace SynthGen.Randomizers.ObjectRandomizers;
 

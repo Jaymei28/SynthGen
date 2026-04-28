@@ -38,7 +38,7 @@ public class Renderer : IDisposable
     private Shader _outlineCompositeShader = null!;
 
     // Waves (FFT)
-    private WaveGenerator _waveGen = null!;
+    public WaveGenerator WaveGen { get; private set; } = null!;
 
     // FBOs
     private Framebuffer _rgbFbo = null!;
@@ -117,7 +117,7 @@ public class Renderer : IDisposable
         _skyboxMesh = Mesh.CreateCube(_gl);
         BuildScreenQuad();
 
-        _waveGen = new WaveGenerator(_gl, 1024, 2);
+        WaveGen = new WaveGenerator(_gl, 1024, 2);
 
         Console.WriteLine("[Renderer] Initialized with FFT WaveGenerator.");
     }
@@ -142,7 +142,7 @@ public class Renderer : IDisposable
         // Update Waves
         if (ocean.Config.Enabled)
         {
-            _waveGen.Update(time, ocean.Config);
+            WaveGen.Update(time, ocean.Config);
         }
 
         float aspect = Width / (float)Math.Max(Height, 1);
@@ -593,11 +593,11 @@ public class Renderer : IDisposable
 
         // Bind FFT Maps
         _gl.ActiveTexture(TextureUnit.Texture0);
-        _gl.BindTexture(TextureTarget.Texture2DArray, _waveGen.DisplacementMap);
+        _gl.BindTexture(TextureTarget.Texture2DArray, WaveGen.DisplacementMap);
         _oceanShader.SetInt("uDisplacementMap", 0);
 
         _gl.ActiveTexture(TextureUnit.Texture1);
-        _gl.BindTexture(TextureTarget.Texture2DArray, _waveGen.NormalMap);
+        _gl.BindTexture(TextureTarget.Texture2DArray, WaveGen.NormalMap);
         _oceanShader.SetInt("uNormalMap", 1);
 
         // Bind Skybox for reflections
@@ -626,7 +626,7 @@ public class Renderer : IDisposable
 
         // Bind displacement map
         _gl.ActiveTexture(TextureUnit.Texture0);
-        _gl.BindTexture(TextureTarget.Texture2DArray, _waveGen.DisplacementMap);
+        _gl.BindTexture(TextureTarget.Texture2DArray, WaveGen.DisplacementMap);
         _oceanDepthShader.SetInt("uDisplacementMap", 0);
 
         _oceanMesh.Draw();

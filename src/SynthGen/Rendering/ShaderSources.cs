@@ -1038,7 +1038,7 @@ uniform struct {
 	float swell;
 	float detail;
 	float spread;
-	uint cascade_index;
+	int cascade_index;
 } pc;
 
 vec2 hash(uvec2 x) {
@@ -1109,7 +1109,7 @@ vec2 get_spectrum_amplitude(ivec2 id, ivec2 map_size) {
 
 void main() {
 	ivec2 dims = imageSize(spectrum).xy;
-	ivec3 gid = ivec3(gl_GlobalInvocationID.xy, pc.cascade_index);
+	ivec3 gid = ivec3(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y), pc.cascade_index);
 	ivec2 id0 = gid.xy;
 	ivec2 id1 = ivec2(mod(vec2(dims) - vec2(id0), vec2(dims)));
 	imageStore(spectrum, gid, vec4(get_spectrum_amplitude(id0, dims), conj_complex(get_spectrum_amplitude(id1, dims))));
@@ -1120,7 +1120,7 @@ void main() {
 #version 460
 #define PI 3.141592653589793
 #define G  9.81
-#define NUM_SPECTRA 4U
+#define NUM_SPECTRA 4
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(rgba16f, binding = 0) restrict readonly uniform image2DArray spectrum;
@@ -1130,8 +1130,8 @@ uniform struct {
 	vec2 tile_length;
 	float depth;
 	float time;
-	uint cascade_index;
-    uint mapSize;
+	int cascade_index;
+    int mapSize;
 } pc;
 
 vec2 exp_complex(float x) { return vec2(cos(x), sin(x)); }
@@ -1140,10 +1140,10 @@ vec2 conj_complex(vec2 x) { return vec2(x.x, -x.y); }
 float dispersion_relation(float k) { return sqrt(G*k*tanh(clamp(k*pc.depth, 0.0, 10.0))); }
 
 void main() {
-	uint map_size = pc.mapSize;
+	int map_size = pc.mapSize;
 	ivec2 dims = imageSize(spectrum).xy;
-	ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
-    uint cascade_idx = pc.cascade_index;
+	ivec2 gid = ivec2(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y));
+    int cascade_idx = pc.cascade_index;
 
 	vec2 k_vec = (vec2(gid) - vec2(dims)*0.5)*2.0*PI / pc.tile_length;
 	float k = length(k_vec) + 1e-6;
@@ -1164,8 +1164,8 @@ void main() {
 	vec2 dhz_dz = -h * k_vec.x * k_unit.x;
 	vec2 dhz_dx = -h * k_vec.y * k_unit.x;
 
-    uint m2 = map_size * map_size;
-    uint offset = cascade_idx * m2 * NUM_SPECTRA * 2;
+    int m2 = map_size * map_size;
+    int offset = cascade_idx * m2 * NUM_SPECTRA * 2;
 	data[offset + 0*m2 + gid.y*map_size + gid.x] = vec2(hx.x - hy.y, hx.y + hy.x);
 	data[offset + 1*m2 + gid.y*map_size + gid.x] = vec2(hz.x - dhy_dx.y, hz.y + dhy_dx.x);
 	data[offset + 2*m2 + gid.y*map_size + gid.x] = vec2(dhy_dz.x - dhx_dx.y, dhy_dz.y + dhx_dx.x);
@@ -1178,21 +1178,21 @@ void main() {
 #define PI 3.141592653589793
 layout(local_size_x = 64) in;
 layout(std430, binding = 0) restrict writeonly buffer Butterfly { vec4 bf[]; };
-uniform uint uMapSize;
+uniform int uMapSize;
 
 vec2 exp_complex(float x) { return vec2(cos(x), sin(x)); }
 
 void main() {
-	uint map_size = uMapSize;
-	uint col = gl_GlobalInvocationID.x;
-	uint stage = gl_GlobalInvocationID.y;
-	uint stride = 1 << stage, mid = map_size >> (stage + 1);
-	uint i = col >> stage, j = col % stride;
+	int map_size = uMapSize;
+	int col = int(gl_GlobalInvocationID.x);
+	int stage = int(gl_GlobalInvocationID.y);
+	int stride = 1 << stage, mid = map_size >> (stage + 1);
+	int i = col >> stage, j = col % stride;
 	vec2 twiddle = exp_complex(PI / float(stride) * float(j));
-	uint r0 = stride*(i + 0) + j, r1 = stride*(i + mid) + j;
-	uint w0 = stride*(2*i + 0) + j, w1 = stride*(2*i + 1) + j;
-	bf[stage*map_size + w0] = vec4(uintBitsToFloat(r0), uintBitsToFloat(r1),  twiddle);
-	bf[stage*map_size + w1] = vec4(uintBitsToFloat(r0), uintBitsToFloat(r1), -twiddle);
+	int r0 = stride*(i + 0) + j, r1 = stride*(i + mid) + j;
+	int w0 = stride*(2*i + 0) + j, w1 = stride*(2*i + 1) + j;
+	bf[stage*map_size + w0] = vec4(intBitsToFloat(r0), intBitsToFloat(r1),  twiddle);
+	bf[stage*map_size + w1] = vec4(intBitsToFloat(r0), intBitsToFloat(r1), -twiddle);
 }
 ";
 
@@ -1205,29 +1205,29 @@ layout(std430, binding = 1) restrict buffer FFT { vec2 data[]; };
 
 shared vec2 row_shared[2 * MAX_MAP_SIZE];
 
-uniform uint uCascadeIndex;
-uniform uint uMapSize;
+uniform int uCascadeIndex;
+uniform int uMapSize;
 
 vec2 mul_complex(vec2 a, vec2 b) { return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
 
 void main() {
-	uint map_size = uMapSize;
-	uint num_stages = findMSB(map_size);
-	uint col = gl_GlobalInvocationID.x;
-	uint row = gl_GlobalInvocationID.y;
-	uint spectrum = gl_GlobalInvocationID.z;
+	int map_size = uMapSize;
+	int num_stages = findMSB(map_size);
+	int col = int(gl_GlobalInvocationID.x);
+	int row = int(gl_GlobalInvocationID.y);
+	int spectrum = int(gl_GlobalInvocationID.z);
     if (col >= map_size) return;
 
-    uint m2 = map_size * map_size;
-    uint cascade_offset = uCascadeIndex * m2 * 4 * 2;
+    int m2 = map_size * map_size;
+    int cascade_offset = uCascadeIndex * m2 * 4 * 2;
 	row_shared[col] = data[cascade_offset + spectrum*m2 + row*map_size + col];
 
-	for (uint stage = 0; stage < num_stages; ++stage) {
+	for (int stage = 0; stage < num_stages; ++stage) {
 		barrier();
-		uint read_off = (stage % 2) * MAX_MAP_SIZE;
-		uint write_off = ((stage + 1) % 2) * MAX_MAP_SIZE;
+		int read_off = (stage % 2) * MAX_MAP_SIZE;
+		int write_off = ((stage + 1) % 2) * MAX_MAP_SIZE;
 		vec4 b = bf[stage*map_size + col];
-		uint r0 = floatBitsToUint(b.x), r1 = floatBitsToUint(b.y);
+		int r0 = floatBitsToInt(b.x), r1 = floatBitsToInt(b.y);
 		vec2 tw = b.zw;
 		vec2 upper = row_shared[read_off + r0];
 		vec2 lower = row_shared[read_off + r1];
@@ -1246,19 +1246,19 @@ layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
 layout(std430, binding = 1) restrict buffer FFT { vec2 data[]; };
 shared vec2 tile[TILE_SIZE][TILE_SIZE+1];
 
-uniform uint uCascadeIndex;
-uniform uint uMapSize;
+uniform int uCascadeIndex;
+uniform int uMapSize;
 
 void main() {
-	uint map_size = uMapSize;
-    uint m2 = map_size * map_size;
-    uint cascade_offset = uCascadeIndex * m2 * 8;
-	uint spectrum = gl_GlobalInvocationID.z;
+	int map_size = uMapSize;
+    int m2 = map_size * map_size;
+    int cascade_offset = uCascadeIndex * m2 * 8;
+	int spectrum = int(gl_GlobalInvocationID.z);
 
-	uvec2 id = gl_GlobalInvocationID.xy;
+	ivec2 id = ivec2(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y));
 	tile[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = data[cascade_offset + (spectrum + 4)*m2 + id.y*map_size + id.x];
 	barrier();
-	uvec2 tid = gl_WorkGroupID.yx * TILE_SIZE + gl_LocalInvocationID.xy;
+	ivec2 tid = ivec2(int(gl_WorkGroupID.y), int(gl_WorkGroupID.x)) * TILE_SIZE + ivec2(int(gl_LocalInvocationID.x), int(gl_LocalInvocationID.y));
 	data[cascade_offset + spectrum*m2 + tid.y*map_size + tid.x] = tile[gl_LocalInvocationID.x][gl_LocalInvocationID.y];
 }
 ";
@@ -1271,18 +1271,18 @@ layout(rgba16f, binding = 1) restrict uniform image2DArray normal_map;
 layout(std430, binding = 2) restrict readonly buffer FFT { vec2 data[]; };
 
 uniform struct {
-	uint cascade_index;
+	int cascade_index;
 	float whitecap;
 	float foam_grow_rate;
 	float foam_decay_rate;
-    uint mapSize;
+    int mapSize;
 } pc;
 
 void main() {
-	uint map_size = pc.mapSize;
-    uint m2 = map_size * map_size;
-    uint cascade_offset = pc.cascade_index * m2 * 8;
-	ivec3 id = ivec3(gl_GlobalInvocationID.xy, pc.cascade_index);
+	int map_size = pc.mapSize;
+    int m2 = map_size * map_size;
+    int cascade_offset = pc.cascade_index * m2 * 8;
+	ivec3 id = ivec3(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y), pc.cascade_index);
 	float sign_shift = float(-2*int((id.x & 1) ^ (id.y & 1)) + 1);
 
 	if (gl_LocalInvocationID.z == 0) {

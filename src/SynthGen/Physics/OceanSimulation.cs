@@ -67,22 +67,36 @@ public class OceanSimulation
         _time = totalTime;
     }
 
-    /// <summary>
-    /// Get the full 3D displacement at a world XZ position.
-    /// Delegates to the modular Skunkworks sampler.
-    /// </summary>
+    public SynthGen.Rendering.WaveGenerator? WaveGen { get; set; }
+
     public Vector3 GetFullDisplacementAt(float x, float z)
     {
+        if (WaveGen != null && Config.Enabled)
+            return WaveGen.SampleDisplacement(x, z, Config.TileLength.X, Config.TileLength.Y);
+            
         return GerstnerWaveSampler.GetFullDisplacement(new Vector3(x, 0, z), _time, Config);
     }
 
     public float GetHeightAt(float x, float z)
     {
-        return GerstnerWaveSampler.GetWaveHeight(new Vector3(x, 0, z), _time, Config);
+        return GetFullDisplacementAt(x, z).Y;
     }
 
     public Vector3 GetNormalAt(float x, float z)
     {
+        if (WaveGen != null && Config.Enabled)
+        {
+            float eps = 0.5f;
+            Vector3 h0 = GetFullDisplacementAt(x, z);
+            Vector3 hx = GetFullDisplacementAt(x + eps, z);
+            Vector3 hz = GetFullDisplacementAt(x, z + eps);
+            
+            Vector3 tx = new Vector3(eps + hx.X - h0.X, hx.Y - h0.Y, hx.Z - h0.Z);
+            Vector3 tz = new Vector3(hz.X - h0.X, hz.Y - h0.Y, eps + hz.Z - h0.Z);
+            
+            return Vector3.Normalize(Vector3.Cross(tz, tx));
+        }
+
         return GerstnerWaveSampler.GetNormal(new Vector3(x, 0, z), _time, Config);
     }
 }

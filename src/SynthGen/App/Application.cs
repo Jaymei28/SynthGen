@@ -95,6 +95,7 @@ public class Application
         _assetManager = new Assets.AssetManager(_gl);
         _renderer = new Rendering.Renderer(_gl, 1920, 1080);
         _ocean = new Physics.OceanSimulation();
+        _ocean.WaveGen = _renderer.WaveGen;
         _buoyancy = new Physics.BuoyancySystem(_ocean);
         _captureManager = new Capture.CaptureManager(_gl, _renderer, _scene, _ocean);
         _trainingManager = new Training.TrainingManager();

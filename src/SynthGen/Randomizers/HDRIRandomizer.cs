@@ -21,6 +21,7 @@ public class HDRIRandomizer : RandomizerBase
     public string? CurrentHDRI { get; set; }
     public float CurrentStrength = 1.0f;
     public bool NeedsRefresh { get; set; } = false;
+    public bool NeedsImport { get; set; } = false;
 
     public void SelectHDRI(string path)
     {
@@ -92,7 +93,7 @@ public class HDRIRandomizer : RandomizerBase
         }
         if (ImGui.Button("Import new HDRI..."))
         {
-            NeedsRefresh = true;
+            NeedsImport = true;
         }
         ImGui.TextWrapped("Place .hdr files in assets/hdri/ folder");
     }

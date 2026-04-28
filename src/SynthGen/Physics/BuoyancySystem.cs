@@ -31,7 +31,8 @@ public class BuoyancySystem
             }
 
             // Get total 3D displacement for both vertical bobbing and horizontal drift
-            Vector3 waveDisp = _ocean.GetFullDisplacementAt(obj.Transform.Position.X, obj.Transform.Position.Z);
+            // MUST sample using the undisplaced AnchorPosition, because the GPU FFT map is indexed by base world coordinates!
+            Vector3 waveDisp = _ocean.GetFullDisplacementAt(body.AnchorPosition.X, body.AnchorPosition.Z);
             float waterLevel = _ocean.Config.Level;
             
             // Detect Manual Movement (if user drags the boat with the gizmo)
@@ -61,7 +62,7 @@ public class BuoyancySystem
             // 3. Tilt to match wave normal
             if (_ocean.Config.Enabled)
             {
-                var normal = _ocean.GetNormalAt(obj.Transform.Position.X, obj.Transform.Position.Z);
+                var normal = _ocean.GetNormalAt(body.AnchorPosition.X, body.AnchorPosition.Z);
                 
                 // Snappy tilt reflection
                 float tiltX = MathF.Atan2(normal.Z, normal.Y) * 180f / MathF.PI;

@@ -17,6 +17,7 @@ public class WaveGenerator : IDisposable
     // Displacement and Normal maps (Texture2DArray: layer per cascade)
     public uint DisplacementMap { get; private set; }
     public uint NormalMap { get; private set; }
+    public float[] CpuDisplacement { get; private set; }
     
     // Internal textures/buffers
     private uint _spectrumTex;
@@ -43,6 +44,8 @@ public class WaveGenerator : IDisposable
         DisplacementMap = CreateTextureArray(mapSize, InternalFormat.Rgba16f);
         NormalMap = CreateTextureArray(mapSize, InternalFormat.Rgba16f);
         _spectrumTex = CreateTextureArray(mapSize, InternalFormat.Rgba16f);
+        
+        CpuDisplacement = new float[_mapSize * _mapSize * 4];
 
         // 2. Create SSBOs
         int numStages = (int)Math.Log2(mapSize);
@@ -89,7 +92,7 @@ public class WaveGenerator : IDisposable
         _gl.BindBufferBase(BufferTargetARB.ShaderStorageBuffer, 0, _butterflyBuffer);
         
         int numStages = (int)Math.Log2(_mapSize);
-        _gl.DispatchCompute((uint)(_mapSize / 64), (uint)numStages, 1);
+        _gl.DispatchCompute((uint)Math.Max(1, _mapSize / 128), (uint)numStages, 1);
         _gl.MemoryBarrier(MemoryBarrierMask.ShaderStorageBarrierBit);
     }
 
@@ -101,7 +104,7 @@ public class WaveGenerator : IDisposable
         UpdateCascade(0, time, cfg);
     }
 
-    private void UpdateCascade(uint index, float time, OceanConfig cfg)
+    private unsafe void UpdateCascade(uint index, float time, OceanConfig cfg)
     {
         // 1. Spectra Compute (Optional frequency re-gen, but here we do it every time for now or on change)
         // In the real version we'd only do this when parameters change.
@@ -143,7 +146,7 @@ public class WaveGenerator : IDisposable
         _gl.BindBufferBase(BufferTargetARB.ShaderStorageBuffer, 1, _fftBuffer);
         
         // Dispatch across all 4 packed spectra
-        _gl.DispatchCompute((uint)(_mapSize), 1, 4); // x=cols, y=rows, z=spectra
+        _gl.DispatchCompute(1, (uint)_mapSize, 4); // x=cols(1 group of 1024), y=rows, z=spectra
         _gl.MemoryBarrier(MemoryBarrierMask.ShaderStorageBarrierBit);
 
         // 4. Transpose
@@ -155,7 +158,7 @@ public class WaveGenerator : IDisposable
 
         // 5. FFT Vertical (actually same kernel, input was transposed)
         _fftCompute.Use();
-        _gl.DispatchCompute((uint)(_mapSize), 1, 4);
+        _gl.DispatchCompute(1, (uint)_mapSize, 4);
         _gl.MemoryBarrier(MemoryBarrierMask.ShaderStorageBarrierBit);
 
         // 6. Unpack
@@ -172,9 +175,54 @@ public class WaveGenerator : IDisposable
 
         _gl.DispatchCompute((uint)(_mapSize / 16), (uint)(_mapSize / 16), 1);
         _gl.MemoryBarrier(MemoryBarrierMask.ShaderImageAccessBarrierBit | MemoryBarrierMask.TextureFetchBarrierBit);
+
+        // Download displacement map for CPU physics
+        fixed (float* ptr = CpuDisplacement)
+        {
+            _gl.GetTextureSubImage(DisplacementMap, 0, 0, 0, 0, (uint)_mapSize, (uint)_mapSize, 1, PixelFormat.Rgba, PixelType.Float, (uint)(CpuDisplacement.Length * sizeof(float)), ptr);
+        }
+    }
+
+    public Vector3 SampleDisplacement(float worldX, float worldZ, float tileLengthX, float tileLengthZ)
+    {
+        if (CpuDisplacement == null) return Vector3.Zero;
+
+        // Wrap world coordinates to [0, tileLength)
+        float u = ((worldX % tileLengthX) + tileLengthX) % tileLengthX / tileLengthX;
+        float v = ((worldZ % tileLengthZ) + tileLengthZ) % tileLengthZ / tileLengthZ;
+
+        // Map to texture coordinates
+        float texX = u * _mapSize;
+        float texY = v * _mapSize;
+
+        // Bilinear interpolation
+        int x0 = (int)MathF.Floor(texX) % _mapSize;
+        int y0 = (int)MathF.Floor(texY) % _mapSize;
+        int x1 = (x0 + 1) % _mapSize;
+        int y1 = (y0 + 1) % _mapSize;
+
+        float tx = texX - MathF.Floor(texX);
+        float ty = texY - MathF.Floor(texY);
+
+        Vector3 c00 = GetPixel(x0, y0);
+        Vector3 c10 = GetPixel(x1, y0);
+        Vector3 c01 = GetPixel(x0, y1);
+        Vector3 c11 = GetPixel(x1, y1);
+
+        Vector3 bottom = Vector3.Lerp(c00, c10, tx);
+        Vector3 top = Vector3.Lerp(c01, c11, tx);
+
+        return Vector3.Lerp(bottom, top, ty);
+    }
+
+    private Vector3 GetPixel(int x, int y)
+    {
+        int index = (y * _mapSize + x) * 4;
+        return new Vector3(CpuDisplacement[index], CpuDisplacement[index + 1], CpuDisplacement[index + 2]);
     }
 
     public void Dispose()
+
     {
         _gl.DeleteTexture(DisplacementMap);
         _gl.DeleteTexture(NormalMap);

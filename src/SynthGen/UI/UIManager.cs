@@ -2345,11 +2345,18 @@ public class UIManager
                     ImGui.TreePop();
                 }
 
-                if (r is HDRIRandomizer hr && hr.NeedsRefresh)
+                if (r is HDRIRandomizer hr)
                 {
-                    if (hr.CurrentHDRI == null) RefreshHDRIs();
-                    else ImportHdriWithDialog();
-                    hr.NeedsRefresh = false;
+                    if (hr.NeedsRefresh)
+                    {
+                        RefreshHDRIs();
+                        hr.NeedsRefresh = false;
+                    }
+                    if (hr.NeedsImport)
+                    {
+                        ImportHdriWithDialog();
+                        hr.NeedsImport = false;
+                    }
                 }
             }
         }
