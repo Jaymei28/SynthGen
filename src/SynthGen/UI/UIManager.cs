@@ -312,9 +312,9 @@ public class UIManager
                 _app.Scene.SelectedObject = null;
             }
 
-            // RANDOMIZE (R) - Dedicated shortcut for fast iteration
-            // (Only triggers if not currently manipulating an object with 'R')
-            if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.R) && !_isManipulating && !_app.Input.CtrlHeld)
+            // RANDOMIZE (Alt+R) - Dedicated shortcut for fast iteration
+            bool altHeld = ImGui.GetIO().KeyAlt || _app.Input.IsKeyPressed(Silk.NET.Input.Key.AltLeft) || _app.Input.IsKeyPressed(Silk.NET.Input.Key.AltRight);
+            if (_app.Input.WasKeyJustPressed(Silk.NET.Input.Key.R) && altHeld)
             {
                 var rng = new Random();
                 foreach (var r in _allRandomizers)
@@ -461,7 +461,7 @@ public class UIManager
         if (ImGui.Button("[C] Capture 1")) _app.CaptureManager.CaptureSingleFrame();
 
         ImGui.SameLine();
-        if (ImGui.Button("[R] Randomize"))
+        if (ImGui.Button("[Alt+R] Randomize"))
         {
             var rng = new Random();
             foreach (var r in _allRandomizers)
@@ -933,7 +933,7 @@ public class UIManager
             Vector3 camUp = Vector3.Normalize(Vector3.Cross(camRight, camFront));
 
             float dist = 10.0f;
-            if (cam != null) dist = Vector3.Distance(cam.Transform.Position, sel.Transform.Position);
+            if (cam != null) dist = Vector3.Distance(cam.Transform.Position, sel.GetWorldMatrix().Translation);
             float moveSense = dist * 0.003f;
 
             // Using cached top-most selection to avoid double-moving children
@@ -948,8 +948,9 @@ public class UIManager
                     Vector3 axis = _axisLock == 'X' ? Vector3.UnitX : (_axisLock == 'Y' ? Vector3.UnitY : Vector3.UnitZ);
                     
                     // Project the axis onto the screen to find the visual direction 
-                    WorldToScreen(sel.Transform.Position, out Vector2 p0);
-                    WorldToScreen(sel.Transform.Position + axis, out Vector2 p1);
+                    Vector3 worldPos = sel.GetWorldMatrix().Translation;
+                    WorldToScreen(worldPos, out Vector2 p0);
+                    WorldToScreen(worldPos + axis, out Vector2 p1);
                     
                     Vector2 screenDir = p1 - p0;
                     if (screenDir.LengthSquared() > 0.0001f)
@@ -992,13 +993,17 @@ public class UIManager
                     }
                     else
                     {
-                        target.Transform.Position = startState.Pos + move;
+                        Matrix4x4.Invert(target.Parent?.GetWorldMatrix() ?? Matrix4x4.Identity, out var invParentWorld);
+                        invParentWorld.M41 = invParentWorld.M42 = invParentWorld.M43 = 0; // translation removed
+                        Vector3 localMove = Vector3.Transform(move, invParentWorld);
+                        target.Transform.Position = startState.Pos + localMove;
                     }
                 }
             }
             else if (_manipMode == ManipulationMode.Rotate)
             {
-                WorldToScreen(sel.Transform.Position, out Vector2 center);
+                Vector3 worldPos = sel.GetWorldMatrix().Translation;
+                WorldToScreen(worldPos, out Vector2 center);
                 Vector3 axis = _axisLock == 'X' ? Vector3.UnitX : (_axisLock == 'Z' ? Vector3.UnitZ : Vector3.UnitY);
                 if (_axisLock == '\0') axis = Vector3.UnitY;
 
@@ -1008,9 +1013,9 @@ public class UIManager
                 if (orth.LengthSquared() < 0.001f) orth = Vector3.Normalize(Vector3.Cross(axis, Vector3.UnitY));
                 if (orth.LengthSquared() < 0.001f) orth = Vector3.Normalize(Vector3.Cross(axis, Vector3.UnitX));
 
-                Vector3 pStart = sel.Transform.Position + orth * 0.5f;
+                Vector3 pStart = worldPos + orth * 0.5f;
                 var rotQ = Quaternion.CreateFromAxisAngle(axis, 5.0f * MathF.PI / 180f); // 5 degree test
-                Vector3 pEnd = sel.Transform.Position + Vector3.Transform(orth * 0.5f, rotQ);
+                Vector3 pEnd = worldPos + Vector3.Transform(orth * 0.5f, rotQ);
 
                 WorldToScreen(pStart, out Vector2 s0);
                 WorldToScreen(pEnd, out Vector2 s1);
@@ -1237,7 +1242,7 @@ public class UIManager
         if (sel == null || cam == null) return;
 
         var drawList = ImGui.GetWindowDrawList();
-        Vector3 worldPos = sel.Transform.Position;
+        Vector3 worldPos = sel.GetWorldMatrix().Translation;
         
         if (!WorldToScreen(worldPos, out Vector2 screenOrigin)) return;
 
@@ -1735,22 +1740,15 @@ public class UIManager
                 }
                 ImGui.Separator();
             }
-            if (mr != null)
+            ImGui.Text("Color & Lighting (Applies Recursively)");
+            UndoableColorEdit4("Base Color", firstMr.Material.BaseColor, v => ApplyMaterialPropertyRecursive(sel, m => m.BaseColor = v));
+            
+            if (ImGui.CollapsingHeader("Emission"))
             {
-                UndoableColorEdit4("Base Color", mr.Material.BaseColor, v => mr.Material.BaseColor = v);
-                UndoableSliderFloat("Smoothness", mr.Material.Smoothness, v => mr.Material.Smoothness = v, 0f, 1f);
-                UndoableSliderFloat("Metallic", mr.Material.Metallic, v => mr.Material.Metallic = v, 0f, 1f);
-                UndoableDragFloat("Normal Scale", mr.Material.NormalScale, v => mr.Material.NormalScale = v, 0.01f, 0f, 8f);
-                
-                if (ImGui.CollapsingHeader("Emission"))
-                {
-                    UndoableColorEdit3("Emissive Color", mr.Material.EmissiveColor, v => mr.Material.EmissiveColor = v);
-                    UndoableDragFloat("Emissive Intensity", mr.Material.EmissiveIntensity, v => mr.Material.EmissiveIntensity = v, 0.1f, 0f, 100f);
-                }
-
-                ImGui.Checkbox("Visible", ref mr.Visible);
-                ImGui.Separator();
+                UndoableColorEdit3("Emissive Color", firstMr.Material.EmissiveColor, v => ApplyMaterialPropertyRecursive(sel, m => m.EmissiveColor = v));
+                UndoableDragFloat("Emissive Intensity", firstMr.Material.EmissiveIntensity, v => ApplyMaterialPropertyRecursive(sel, m => m.EmissiveIntensity = v), 0.1f, 0f, 100f);
             }
+            ImGui.Separator();
 
             ImGui.Text("Texture Maps (Applies Recursively)");
 
@@ -1839,6 +1837,28 @@ public class UIManager
             // --- Color Intensity ---
             float cIntensity = firstMr?.Material.ColorIntensity ?? 1.0f;
             UndoableSliderFloat("Color Intensity", cIntensity, v => ApplyMaterialPropertyRecursive(sel, m => m.ColorIntensity = v), 0f, 5f);
+
+            // --- Double Sided ---
+            bool isDoubleSided = firstMr?.Material.DoubleSided ?? false;
+            if (ImGui.Checkbox("Double Sided (No Culling)", ref isDoubleSided))
+            {
+                ApplyMaterialPropertyRecursive(sel, m => m.DoubleSided = isDoubleSided);
+            }
+
+            // --- Cast Shadow ---
+            bool castsShadow = firstMr?.CastShadow ?? true;
+            if (ImGui.Checkbox("Cast Shadows", ref castsShadow))
+            {
+                var q = new Queue<SceneObject>();
+                q.Enqueue(sel);
+                while (q.Count > 0)
+                {
+                    var curr = q.Dequeue();
+                    var currMr = curr.GetComponent<MeshRendererComponent>();
+                    if (currMr != null) currMr.CastShadow = castsShadow;
+                    foreach (var child in curr.Children) q.Enqueue(child);
+                }
+            }
         }
 
         // ── Light ──

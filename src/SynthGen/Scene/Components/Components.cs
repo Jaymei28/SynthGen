@@ -41,6 +41,7 @@ public class MeshRendererComponent
     public Rendering.Mesh? Mesh;
     public Rendering.Material Material = new();
     public bool Visible = true;
+    public bool CastShadow = true;
 
     public MeshRendererComponent() { }
     public MeshRendererComponent(Rendering.Mesh mesh)

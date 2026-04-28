@@ -21,11 +21,13 @@ uniform mat4 uProjection;
 uniform mat3 uNormalMatrix;
 uniform bool uHasSkinning;
 uniform mat4 uBones[100];
+uniform mat4 uLightSpaceMatrix;
 
 out vec3 vWorldPos;
 out vec3 vNormal;
 out vec2 vUV;
 out vec3 vTangent;
+out vec4 vLightSpacePos;
 
 void main() {
     mat4 skinMat = mat4(1.0);
@@ -38,6 +40,7 @@ void main() {
 
     vec4 worldPos = uModel * skinMat * vec4(aPos, 1.0);
     vWorldPos = worldPos.xyz;
+    vLightSpacePos = uLightSpaceMatrix * worldPos;
     
     mat3 skinNormal = mat3(skinMat);
     vNormal = normalize(uNormalMatrix * skinNormal * aNormal);
@@ -55,6 +58,7 @@ in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vUV;
 in vec3 vTangent;
+in vec4 vLightSpacePos;
 
 uniform vec4  uBaseColor;
 uniform float uSmoothness;
@@ -76,15 +80,46 @@ uniform vec3  uLightColor;
 uniform float uLightIntensity;
 uniform vec3  uAmbient;
 
+uniform sampler2D uShadowMap;
+uniform int uRenderShadows;
+
 out vec4 FragColor;
+
+float ShadowCalculation(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir)
+{
+    if (uRenderShadows == 0) return 0.0;
+    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+    projCoords = projCoords * 0.5 + 0.5; // [-1, 1] to [0, 1]
+    if (projCoords.z > 1.0) return 0.0;
+
+    float currentDepth = projCoords.z;
+    float bias = max(0.005 * (1.0 - dot(normal, lightDir)), 0.001);
+
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            float pcfDepth = texture(uShadowMap, projCoords.xy + vec2(x, y) * texelSize).r; 
+            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;        
+        }    
+    }
+    shadow /= 9.0;
+    return shadow;
+}
 
 void main() {
     // 1. Albedo & Alpha
     vec3 albedo = uBaseColor.rgb;
+    float alpha = uBaseColor.a;
     if (uHasTexture == 1) {
         vec4 texColor = texture(uAlbedoTex, vUV);
         albedo *= pow(texColor.rgb, vec3(2.2)); // sRGB to Linear
+        alpha *= texColor.a;
     }
+    
+    // Alpha discard for completely transparent cutouts (like foliage) in opaque pass
+    if (alpha < 0.05) discard;
+
     albedo *= uColorIntensity;
 
     // 2. Normal Mapping (TBN)
@@ -115,8 +150,10 @@ void main() {
     float spec = pow(max(dot(N, H), 0.0), specPower);
     float fresnel = uMetallic + (1.0 - uMetallic) * pow(1.0 - max(dot(V, H), 0.0), 5.0);
 
-    vec3 diffuse = albedo * diff * uLightColor * uLightIntensity;
-    vec3 specular = vec3(spec * fresnel * uSmoothness) * uLightColor * uLightIntensity;
+    float shadow = ShadowCalculation(vLightSpacePos, N, L);
+
+    vec3 diffuse = albedo * diff * uLightColor * uLightIntensity * (1.0 - shadow);
+    vec3 specular = vec3(spec * fresnel * uSmoothness) * uLightColor * uLightIntensity * (1.0 - shadow);
     vec3 ambient = uAmbient * albedo;
     
     // 4. Emissive
@@ -128,7 +165,7 @@ void main() {
     color = (color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14);
     color = pow(color, vec3(1.0/2.2));
 
-    FragColor = vec4(color, uBaseColor.a);
+    FragColor = vec4(color, alpha);
 }
 ";
 
@@ -212,6 +249,11 @@ void main() {
     linearDepth = clamp(linearDepth, 0.0, 1.0);
     FragColor = vec4(vec3(linearDepth), 1.0);
 }
+";
+
+    public const string SHADOW_FRAG = @"
+#version 330 core
+void main() {}
 ";
 
     // === Grid Shaders ========================================================

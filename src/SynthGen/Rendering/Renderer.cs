@@ -40,6 +40,11 @@ public class Renderer : IDisposable
     // Waves (FFT)
     public WaveGenerator WaveGen { get; private set; } = null!;
 
+    // --- Shadows ---
+    private Shader _shadowShader = null!;
+    private uint _shadowFbo;
+    private uint _shadowMap;
+
     // FBOs
     private Framebuffer _rgbFbo = null!;
     private Framebuffer _segFbo = null!;
@@ -82,7 +87,7 @@ public class Renderer : IDisposable
         Initialize();
     }
 
-    private void Initialize()
+    private unsafe void Initialize()
     {
         // Compile all shaders
         _pbrShader = new Shader(_gl, ShaderSources.PBR_VERT, ShaderSources.PBR_FRAG);
@@ -104,6 +109,7 @@ public class Renderer : IDisposable
         _weatherShader = new Shader(_gl, ShaderSources.SCREEN_VERT, ShaderSources.WEATHER_FRAG);
         _outlineMaskShader = new Shader(_gl, ShaderSources.OUTLINE_MASK_VERT, ShaderSources.OUTLINE_MASK_FRAG);
         _outlineCompositeShader = new Shader(_gl, ShaderSources.SCREEN_VERT, ShaderSources.OUTLINE_COMPOSITE_FRAG);
+        _shadowShader = new Shader(_gl, ShaderSources.DEPTH_VERT, ShaderSources.SHADOW_FRAG);
 
         // Create FBOs
         _rgbFbo = new Framebuffer(_gl, Width, Height);
@@ -112,6 +118,22 @@ public class Renderer : IDisposable
         _postFboA = new Framebuffer(_gl, Width, Height);
         _postFboB = new Framebuffer(_gl, Width, Height);
         _selectionMaskFbo = new Framebuffer(_gl, Width, Height);
+
+        _shadowFbo = _gl.GenFramebuffer();
+        _shadowMap = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _shadowMap);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent, 4096, 4096, 0, PixelFormat.DepthComponent, PixelType.Float, null);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
+        float[] borderColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+        unsafe { fixed (float* ptr = borderColor) _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureBorderColor, ptr); }
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _shadowMap, 0);
+        _gl.DrawBuffer(DrawBufferMode.None);
+        _gl.ReadBuffer(ReadBufferMode.None);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 
         BuildGridMesh();
         _skyboxMesh = Mesh.CreateCube(_gl);
@@ -149,6 +171,48 @@ public class Renderer : IDisposable
         var view = cam.GetViewMatrix();
         var proj = cam.GetProjectionMatrix(aspect);
 
+        // ── Find Directional Light ────────────────────────────────────────
+        Vector3 lightDir = Vector3.Normalize(new Vector3(-0.5f, -1f, -0.5f));
+        bool castShadows = true;
+        foreach (var obj in scene.Objects)
+        {
+            var light = obj.GetComponent<LightComponent>();
+            if (light != null && light.LightType == LightType.Directional)
+            {
+                float yaw = obj.Transform.Rotation.Y * MathF.PI / 180f;
+                float pitch = obj.Transform.Rotation.X * MathF.PI / 180f;
+                lightDir = new Vector3(MathF.Cos(pitch) * MathF.Sin(yaw), MathF.Sin(pitch), MathF.Cos(pitch) * MathF.Cos(yaw));
+                castShadows = light.CastShadow;
+                break;
+            }
+        }
+
+        Matrix4x4 lightSpaceMatrix = Matrix4x4.Identity;
+
+        // ── Shadow Pass ───────────────────────────────────────────────────
+        if (castShadows)
+        {
+            float bounds = 40.0f;
+            Matrix4x4 lightProj = Matrix4x4.CreateOrthographic(bounds, bounds, 1.0f, 150.0f);
+            Vector3 target = cam.OrbitTarget; 
+            Matrix4x4 lightView = Matrix4x4.CreateLookAt(target - Vector3.Normalize(lightDir) * 70.0f, target, Vector3.UnitY);
+            lightSpaceMatrix = lightView * lightProj;
+
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+            _gl.Viewport(0, 0, 4096, 4096);
+            _gl.Clear(ClearBufferMask.DepthBufferBit);
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.Enable(EnableCap.CullFace);
+
+            _shadowShader.Use();
+            _shadowShader.SetMat4("uProjection", lightProj);
+            _shadowShader.SetMat4("uView", lightView);
+
+            DrawObjectsShadow(scene);
+
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        }
+
         _gl.Viewport(0, 0, (uint)Width, (uint)Height);
 
         // ── RGB Pass ──────────────────────────────────────────────────────
@@ -158,7 +222,7 @@ public class Renderer : IDisposable
         _gl.Enable(EnableCap.DepthTest);
 
         // Draw objects (opaque first)
-        DrawObjectsPBR(scene, view, proj, cam, ocean);
+        DrawObjectsPBR(scene, view, proj, cam, ocean, false, lightSpaceMatrix, castShadows);
 
         // ── Skybox Pass ───────────────────────────────────────────────────
         if (HdriTextureID != 0 && _skyboxMesh != null)
@@ -203,6 +267,8 @@ public class Renderer : IDisposable
         {
             DrawGrid(view, proj);
         }
+
+        DrawObjectsPBR(scene, view, proj, cam, ocean, true, lightSpaceMatrix, castShadows);
 
         _gl.DepthMask(true);
         _gl.Enable(EnableCap.CullFace);
@@ -276,12 +342,51 @@ public class Renderer : IDisposable
         return new Vector3(pixels[0] / 255f, pixels[1] / 255f, pixels[2] / 255f);
     }
 
-    private void DrawObjectsPBR(SceneGraph scene, Matrix4x4 view, Matrix4x4 proj, Camera cam, OceanSimulation ocean)
+    private void DrawObjectsShadow(SceneGraph scene)
+    {
+        foreach (var obj in scene.Objects)
+        {
+            var mr = obj.GetComponent<MeshRendererComponent>();
+            if (mr?.Mesh == null || !mr.Visible) continue;
+            
+            // Skip transparent objects for main shadow mapping
+            if (mr.Material.BaseColor.W < 0.99f) continue;
+            
+            // Skip objects with shadow casting disabled
+            if (!mr.CastShadow) continue;
+            
+            _shadowShader.SetMat4("uModel", obj.GetWorldMatrix());
+            
+            bool useSkinning = mr.Mesh.HasSkinning && mr.Mesh.Skeleton != null && mr.Mesh.Skeleton.Bones.Count > 0;
+            _shadowShader.SetInt("uHasSkinning", useSkinning ? 1 : 0);
+            if (useSkinning)
+            {
+                var matrices = mr.Mesh.Skeleton!.GetFinalMatrices();
+                for (int m = 0; m < matrices.Length && m < 100; m++)
+                    _shadowShader.SetMat4($"uBones[{m}]", matrices[m]);
+            }
+            
+            if (mr.Material.DoubleSided) _gl.Disable(EnableCap.CullFace);
+            mr.Mesh.Draw();
+            if (mr.Material.DoubleSided) _gl.Enable(EnableCap.CullFace);
+        }
+    }
+
+    private void DrawObjectsPBR(SceneGraph scene, Matrix4x4 view, Matrix4x4 proj, Camera cam, OceanSimulation ocean, bool drawTransparent, Matrix4x4 lightSpaceMatrix, bool castShadows)
     {
         _pbrShader.Use();
         _pbrShader.SetMat4("uView", view);
         _pbrShader.SetMat4("uProjection", proj);
         _pbrShader.SetVec3("uCameraPos", cam.Transform.Position);
+        _pbrShader.SetMat4("uLightSpaceMatrix", lightSpaceMatrix);
+        
+        _pbrShader.SetInt("uRenderShadows", castShadows ? 1 : 0);
+        if (castShadows)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture2);
+            _gl.BindTexture(TextureTarget.Texture2D, _shadowMap);
+            _pbrShader.SetInt("uShadowMap", 2);
+        }
         
         // Link ambient light to ocean color for better blending
         Vector3 oceanTint = ocean.Config.WaterColor * 0.4f;
@@ -318,6 +423,10 @@ public class Renderer : IDisposable
         {
             var mr = obj.GetComponent<MeshRendererComponent>();
             if (mr?.Mesh == null || !mr.Visible) continue;
+            
+            bool isTransparent = mr.Material.BaseColor.W < 0.99f;
+            if (drawTransparent && !isTransparent) continue;
+            if (!drawTransparent && isTransparent) continue;
 
             var model = obj.GetWorldMatrix();
             _pbrShader.SetMat4("uModel", model);
@@ -375,7 +484,11 @@ public class Renderer : IDisposable
                 _pbrShader.SetInt("uHasNormalMap", 0);
             }
 
+            if (mr.Material.DoubleSided && !drawTransparent) _gl.Disable(EnableCap.CullFace);
+
             mr.Mesh.Draw();
+
+            if (mr.Material.DoubleSided && !drawTransparent) _gl.Enable(EnableCap.CullFace);
         }
     }
 

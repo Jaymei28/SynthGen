@@ -229,7 +229,8 @@ public class SceneSerializer
         var data = new ObjectData
         {
             Name = obj.Name,
-            AssetPath = string.IsNullOrEmpty(obj.AssetPath) ? null : Path.GetFullPath(obj.AssetPath),
+            AssetPath = string.IsNullOrEmpty(obj.AssetPath) ? null : 
+                        (obj.AssetPath.StartsWith("primitive:") ? obj.AssetPath : Path.GetFullPath(obj.AssetPath)),
             Position = obj.Transform.Position,
             Rotation = obj.Transform.Rotation,
             Scale = obj.Transform.Scale,

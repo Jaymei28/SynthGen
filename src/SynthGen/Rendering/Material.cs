@@ -14,6 +14,7 @@ public class Material
     public float ColorIntensity = 1.0f;
     public Vector3 EmissiveColor = Vector3.Zero;
     public float EmissiveIntensity = 1.0f;
+    public bool DoubleSided = false;
 
     [System.Text.Json.Serialization.JsonIgnore]
     public uint AlbedoTextureID;

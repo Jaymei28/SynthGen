@@ -362,7 +362,8 @@ public class AssetManager
             }
         }
         
-        // Fallback: Heuristically find Normal
+        // Fallback: Heuristically find Normal (DISABLED per user request to prevent wrong inferences)
+        /*
         if (mr.Material.NormalTextureID == 0)
         {
             string? absPath = AutoDiscoverHeuristicTexture(modelPath, nodeName, aiMesh.Name, aiMat.Name, new[] { "normal", "nrm", "nor" });
@@ -373,12 +374,28 @@ public class AssetManager
                 mr.Material.NormalTexturePath = absPath;
             }
         }
+        */
 
         // Base color
         if (aiMat.HasColorDiffuse)
         {
             var c = aiMat.ColorDiffuse;
             mr.Material.BaseColor = new Vector4(c.R, c.G, c.B, c.A);
+        }
+        
+        // Transparency / Opacity overriding
+        if (aiMat.HasOpacity && aiMat.Opacity < 1.0f)
+        {
+            mr.Material.BaseColor = new Vector4(mr.Material.BaseColor.X, mr.Material.BaseColor.Y, mr.Material.BaseColor.Z, aiMat.Opacity);
+        }
+        else if (aiMat.HasColorTransparent)
+        {
+            var tc = aiMat.ColorTransparent;
+            float luminance = (tc.R * 0.3f) + (tc.G * 0.59f) + (tc.B * 0.11f);
+            if (luminance > 0.01f) // some formats define 'transparent color' brightness as inverse opacity
+            {
+                mr.Material.BaseColor = new Vector4(mr.Material.BaseColor.X, mr.Material.BaseColor.Y, mr.Material.BaseColor.Z, Math.Max(0.1f, 1.0f - luminance));
+            }
         }
 
         // Emissive
@@ -407,6 +424,11 @@ public class AssetManager
         {
             mr.Material.Metallic = 0.0f;
             mr.Material.Smoothness = 0.2f;
+        }
+        
+        if (aiMat.HasTwoSided)
+        {
+            mr.Material.DoubleSided = aiMat.IsTwoSided;
         }
     }
 
